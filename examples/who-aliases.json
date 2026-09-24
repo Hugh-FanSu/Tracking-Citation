@@ -1,0 +1,18 @@
+{
+  "id": "WHO",
+  "canonical_name": "World Health Organization",
+  "kind": "organization",
+  "aliases": [
+    "WHO",
+    "World Health Organization",
+    "World Health Organisation",
+    "世界卫生组织"
+  ],
+  "domains": [
+    "who.int"
+  ],
+  "publisher_aliases": [
+    "World Health Organization",
+    "World Health Organisation"
+  ]
+}

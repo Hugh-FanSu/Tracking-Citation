@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper-citation-pipeline"
+version = "0.8.0"
+description = "Local PDF citation evidence pipeline with configurable targets and Excel templates"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["requests>=2.32,<3", "lxml>=5,<7", "PyMuPDF>=1.24,<2", "openpyxl>=3.1,<4"]
+
+[project.optional-dependencies]
+full = ["docling>=2.130,<3"]
+dev = ["build>=1,<2"]
+
+[project.scripts]
+paper-citations = "paper_citation_pipeline.cli:main"
+
+[project.gui-scripts]
+paper-citations-gui = "paper_citation_pipeline.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+paper_citation_pipeline = ["engine/runtime/config/*.json", "skill/*.md", "skill/references/*.md", "skill/agents/*.yaml", "examples/*.json", "assets/*.yaml"]

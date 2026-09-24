@@ -1,0 +1,86 @@
+{
+  "version": "unep-aliases-1.5",
+  "organization_id": "UNEP",
+  "canonical_name": "United Nations Environment Programme",
+  "aliases": [
+    {
+      "name": "United Nations Environment Programme",
+      "kind": "full_name"
+    },
+    {
+      "name": "United Nations Environment Program",
+      "kind": "spelling_variant"
+    },
+    {
+      "name": "United Nations Environment",
+      "kind": "short_name_candidate"
+    },
+    {
+      "name": "UN Environment Programme",
+      "kind": "short_name_candidate"
+    },
+    {
+      "name": "UN Environment Program",
+      "kind": "short_name_candidate"
+    },
+    {
+      "name": "UN Environment",
+      "kind": "short_name_candidate"
+    },
+    {
+      "name": "UNEP",
+      "kind": "abbreviation"
+    },
+    {
+      "name": "U.N.E.P.",
+      "kind": "punctuated_abbreviation"
+    },
+    {
+      "name": "GlobalABC/UNEP",
+      "kind": "joint_author_candidate"
+    },
+    {
+      "name": "UNEP/SETAC Life Cycle Initiative",
+      "kind": "joint_author_candidate"
+    },
+    {
+      "name": "UNEP/SETAC",
+      "kind": "joint_author_candidate"
+    },
+    {
+      "name": "UNEP-SETAC",
+      "kind": "joint_author_candidate"
+    },
+    {
+      "name": "UNEP/MAP",
+      "kind": "joint_author_candidate"
+    },
+    {
+      "name": "United Nations Environmental Program",
+      "kind": "observed_spelling_variant"
+    },
+    {
+      "name": "United Nations Environmental Programme",
+      "kind": "observed_spelling_variant"
+    },
+    {
+      "name": "UNEP - United Nations Environment Programme",
+      "kind": "expanded_abbreviation"
+    },
+    {
+      "name": "U.N. Environment",
+      "kind": "observed_punctuated_short_name"
+    },
+    {
+      "name": "UNEP/EEAP",
+      "kind": "observed_panel_author"
+    }
+  ],
+  "not_global_aliases": [
+    "United Nations",
+    "UN",
+    "Environment Programme",
+    "Programme UNE"
+  ],
+  "policy": "Aliases identify candidates only. Preserve original strings. Confirm the specific report separately. Broader labels require local reference evidence."
+}

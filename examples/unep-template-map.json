@@ -1,0 +1,78 @@
+{
+  "sheets": [
+    {
+      "sheet": "引用记录",
+      "entity": "citations",
+      "columns": {
+        "记录编号*": "record_id",
+        "论文编号*": "paper_id",
+        "报告编号（可空）": "report_id",
+        "引用位置编号*": "location_id",
+        "Part统一分类*": "part",
+        "章节标题原文*": "section_title",
+        "小节标题原文": "subsection_title",
+        "PDF页序*": "pdf_pages",
+        "印刷页码": "printed_page",
+        "段落编号*": "paragraph_id",
+        "段内引用序号*": "occurrence_in_paragraph",
+        "引用标记原文*": "raw_marker",
+        "引用句原文*": "citation_sentence",
+        "所在完整段落*": "paragraph_text",
+        "前一段原文": "previous_paragraph",
+        "后一段原文": "next_paragraph",
+        "内容载体*": "carrier",
+        "参考文献条目原文*": "raw_reference",
+        "同处其他引用原文": "other_references",
+        "目标内容引用确认状态*": "confirmation_status",
+        "上下文完整性*": "context_status",
+        "疑问及缺失原因": "notes",
+        "采集人*": "collector",
+        "复核人": "reviewer",
+        "处理日期*": "processed_date",
+        "规则版本*": "rule_version",
+        "工具与模型版本": "software",
+        "具体报告名称匹配状态*": "report_match_status",
+        "匹配到的具体报告名称": "report_title"
+      }
+    },
+    {
+      "sheet": "论文信息",
+      "entity": "papers",
+      "columns": {
+        "论文编号*": "paper_id",
+        "题名原文*": "title",
+        "DOI": "doi",
+        "Scopus EID": "eid",
+        "发表年份*": "year",
+        "作者原文": "authors",
+        "期刊或出版物": "journal",
+        "摘要原文*": "abstract",
+        "研究目的原文（可选）": "purpose",
+        "主要结论原文（可选）": "conclusion",
+        "PDF文件名或相对路径*": "source_pdf",
+        "文件版本*": "file_version",
+        "PDF总页数": "page_count",
+        "全文检查状态*": "fulltext_status",
+        "任务包编号*": "batch",
+        "缺失或其他说明": "notes"
+      }
+    },
+    {
+      "sheet": "报告信息",
+      "entity": "reports",
+      "columns": {
+        "报告编号*": "report_id",
+        "发布组织*": "target_name",
+        "报告题名原文*": "title",
+        "年份*": "year",
+        "版本或系列期次*": "edition",
+        "DOI或ISBN": "identifiers",
+        "官网链接": "url",
+        "PDF文件名或相对路径": "source_pdf",
+        "报告语言": "language",
+        "核实状态*": "verification_status",
+        "备注": "notes"
+      }
+    }
+  ]
+}

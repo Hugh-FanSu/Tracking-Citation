@@ -1,0 +1,10 @@
+{
+  "target": "UNEP",
+  "aliases": "unep-aliases.json",
+  "input": "../input",
+  "output": "../output",
+  "grobid_url": "http://localhost:8070",
+  "expect_target": true,
+  "resume": true,
+  "id_state": "../numbering.json"
+}

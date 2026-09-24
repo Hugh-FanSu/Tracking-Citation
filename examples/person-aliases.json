@@ -1,0 +1,12 @@
+{
+  "id": "jane-example",
+  "canonical_name": "Jane Example",
+  "kind": "person",
+  "aliases": [
+    "Jane Example",
+    "Example, J.",
+    "Example"
+  ],
+  "domains": [],
+  "publisher_aliases": []
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "论文引用证据转换"
+  short_description: "批量生成带引用关系、原文定位和报告名称匹配信息的论文 MD 与 JSON"
+  default_prompt: "使用 $paper-citation-pipeline 将本批论文转换为可供 agent 逐篇采集的 MD 和引用证据 JSON，遵守目标内容引用收录口径。"
