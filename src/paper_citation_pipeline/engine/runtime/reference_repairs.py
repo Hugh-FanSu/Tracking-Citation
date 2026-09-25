@@ -10,6 +10,18 @@ YEAR=re.compile(r'\b(?:19|20)\d{2}[a-z]?\b')
 DATE=re.compile(r'\b(?:19|20)\d{2}[a-z]?\b|n\.\s*d\.',re.I)
 ORG_START=re.compile(r'^'+ORG+r'(?:\s*\('+ORG+r'\))?\s*[,.( ]+\s*(?:19|20)\d{2}',re.I)
 
+def local_metadata(parent,text,prefix):
+    """A merged record's metadata belongs only to the child that contains it."""
+    import unicodedata
+    def key(value):
+        return ''.join(c for c in unicodedata.normalize('NFKD',value).casefold() if c.isalnum())
+    body=key(text); author=key(prefix)
+    return dict(identifiers=[copy.deepcopy(v) for v in parent.get('identifiers',[])
+                             if v.get('value') and key(v['value']) in body],
+                authors=[copy.deepcopy(a) for a in parent.get('authors',[])
+                         if a.get('family') and key(a['family']) in author],
+                venue=parent.get('venue') if parent.get('venue') and key(parent['venue']) in body else None)
+
 def repair(pdf,data):
     result=copy.deepcopy(data); corrections=[]
     with pymupdf.open(pdf) as doc:
@@ -21,7 +33,7 @@ def repair(pdf,data):
             if not coords or len({c['page'] for c in coords})!=1:continue
             page=coords[0]['page']
             if page not in page_lines:
-                page_lines[page]=[(pymupdf.Rect(l['bbox']),''.join(s['text'] for s in l['spans'])) for block in doc[page-1].get_text('dict')['blocks'] for l in block.get('lines',[])]
+                page_lines[page]=[(pymupdf.Rect(l['bbox']),''.join(s['text'] for s in l['spans'])) for block in doc[page-1].get_text('dict')['blocks'] for l in block.get('lines',[]) if abs(l.get('dir',(1,0))[1])<.05]
             selected=[]
             for c in coords:
                 box=pymupdf.Rect(c['x'],c['y'],c['x']+c['width'],c['y']+c['height'])
@@ -44,16 +56,18 @@ def repair(pdf,data):
             for i,(seg,text) in enumerate(zip(segments,texts)):
                 year=DATE.search(text[:240]);label=re.sub(r'\s+','',year.group().lower())
                 prefix=text[:year.start()].strip(' .,( ')
-                if '(' in text[max(0,year.start()-2):year.start()] and len(prefix.split())>6:
-                    title=prefix
-                else:
-                    title=re.split(r'\.\s+',text[year.end():].lstrip(')., '),maxsplit=1)[0]
+                title=re.split(r'\.\s+',text[year.end():].lstrip(')., '),maxsplit=1)[0]
+                trailing=re.search(r',\s*((?:19|20)\d{2}[a-z]?)\.\s*$',text)
+                colon=text.find(':')
+                if trailing and 0<colon<year.start() and not re.search(r'\(\s*(?:19|20)\d{2}\s*\)',text[:colon]):
+                    label=trailing[1];prefix=text[:colon].strip();title=text[colon+1:trailing.start()].strip()
                 child=copy.deepcopy(b)
                 child.update(id=b['id'] if i==0 else b['id']+f'__pdf{i+1}',raw_citation=text,
                              year=label[:4] if label!='n.d.' else None,year_label=label,raw_author_prefix=prefix,title=title,
                              authors=b.get('authors',[]) if i==0 else [],
                              coordinates=[{'page':page,'x':r.x0,'y':r.y0,'width':r.width,'height':r.height,'origin':'top-left','unit':'PDF point'} for r,t in seg],
                              source='original_pdf_hanging_indent_split',numeric_label=None)
+                child.update(local_metadata(b,text,prefix))
                 children.append(child)
             pos=result['bibliography'].index(b);result['bibliography'][pos:pos+1]=children
             changes=[]

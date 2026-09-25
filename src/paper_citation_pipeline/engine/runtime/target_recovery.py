@@ -82,12 +82,19 @@ def number_map(doc,index):
         for block in page.get_text('dict')['blocks']:
             for line in block.get('lines',[]):
                 rect=pymupdf.Rect(line['bbox'])
-                if (rect&box).get_area()/max(box.get_area(),.01)<.5:continue
-                text=''.join(s['text'] for s in line['spans']);m=re.match(r'^\s*\[(\d+)\]\s*(.+)',text)
+                if abs(rect.y0-box.y0)>4 or (rect&box).get_area()/max(min(rect.get_area(),box.get_area()),.01)<.5:continue
+                text=''.join(s['text'] for s in line['spans']);m=re.match(r'^\s*(?:[\[(](\d+)[\])]|(\d+)\.)\s*(.+)',text)
+                if not m:
+                    labels=[]
+                    for bb in page.get_text('dict')['blocks']:
+                        for ll in bb.get('lines',[]):
+                            tt=''.join(ss['text'] for ss in ll['spans']).strip();rr=pymupdf.Rect(ll['bbox'])
+                            if re.fullmatch(r'\d+\.',tt) and abs(rr.y0-rect.y0)<2 and 0<=rect.x0-rr.x1<40:labels.append(tt)
+                    if len(labels)==1:m=re.match(r'^\s*(?:[\[(](\d+)[\])]|(\d+)\.)\s*(.+)',labels[0]+' '+text)
                 if not m:continue
-                prefix=compact(m[2])[:40]
+                prefix=compact(m[3])[:40]
                 if len(prefix)<15 or not compact(r.get('raw_citation','')).startswith(prefix):continue
-                n=int(m[1]);found.setdefault(n,[]).append(r)
+                n=int(m[1] or m[2]);found.setdefault(n,[]).append(r)
                 evidence[n]=dict(page=c['page'],text=text,bbox=list(rect))
     return {n:rs[0] for n,rs in found.items() if len({r['reference_id'] for r in rs})==1},evidence
 
@@ -96,7 +103,28 @@ def recover_numeric(pdf,data,index):
     changes=[];findings=[]
     with pymupdf.open(pdf) as doc:
         mapping,labels=number_map(doc,index)
-        for g in data.get('unlinked_numeric_pdf_groups',[]):
+        for o in index['occurrences']:
+            if o.get('style')!='numeric':continue
+            for n in o.get('expanded_numbers',[]):
+                r=mapping.get(n)
+                if not r or not r.get('organization_candidate'):continue
+                # Resolve only a missing number, never overwrite a conflicting parser link.
+                if n not in o.get('unresolved_numbers',[]):continue
+                if add_edge(index,o,r,'original_pdf_printed_reference_number'):
+                    o['unresolved_numbers'].remove(n)
+                    changes.append(dict(kind='recover_existing_numeric_marker',location_id=o['location_id'],reference_id=r['reference_id'],printed_number=n))
+        groups=list(data.get('unlinked_numeric_pdf_groups',[]))
+        for span in data.get('unlinked_superscript_candidates',[]):
+            if not any(n in mapping and mapping[n].get('organization_candidate') for n in span.get('expanded_numbers',[])):continue
+            page_no=span['page'];box=pymupdf.Rect(span['bbox']);page=doc[page_no-1]
+            # First-page author superscripts and unit exponents are not citations.
+            if page_no==1:continue
+            if any(c['page']==page_no and (box&pymupdf.Rect(c['x'],c['y'],c['x']+c['width'],c['y']+c['height'])).get_area()>0 for r in index['references'] for c in r.get('coordinates',[])):continue
+            before=page.get_text(clip=pymupdf.Rect(box.x0-18,box.y0-2,box.x0,box.y1+4)).rstrip()
+            if re.search(r'(?:\d|[−+×]|\b(?:kg|cm|mm|mol|m|s))$',before):continue
+            if not re.search(r'[A-Za-z]{3}',span.get('context','')) or len(span.get('context',''))<60:continue
+            groups.append(dict(raw_marker=span['raw_marker'],expanded_numbers=span['expanded_numbers'],page=page_no,bboxes=[span['bbox']],source='original_pdf_superscript_unlinked'))
+        for g in groups:
             targets=[mapping[n] for n in g['expanded_numbers'] if n in mapping and mapping[n].get('organization_candidate')]
             if not targets:continue
             page_no=g['page'];page=doc[page_no-1];box=pymupdf.Rect(g['bboxes'][0])

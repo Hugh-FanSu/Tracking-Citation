@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import os
+import unicodedata
 from urllib.parse import urlsplit
 from collections import Counter
 from pathlib import Path
@@ -23,7 +24,7 @@ def alias_pattern(name):
 
 
 ORG = '(?:' + '|'.join(alias_pattern(a['name']) for a in sorted(ALIASES['aliases'], key=lambda a: -len(a['name']))) + ')'
-ORG_PREFIX = re.compile(r'^\s*(' + ORG + r')(?=\s*(?:[,.(;:]|(?:19|20)\d{2}\b|$))', re.I)
+ORG_PREFIX = re.compile(r'^\s*(' + ORG + r')(?=\s*(?:[,.(;:\[]|(?:19|20)\d{2}\b|$))', re.I)
 DATE_LABEL = r'(?:19|20)\d{2}[a-z]?|n\.\s*d\.'
 ORG_YEAR = re.compile(r'(?<!\w)(' + ORG + r')(?:\s*(?:\(\s*'+ORG+r'\s*\)|\[\s*'+ORG+r'\s*\]))?(?:\s+et\s+al\.?)?\s*(?:,\s*|\.?\s*\(\s*)(' + DATE_LABEL + r')', re.I)
 ORG_SPACE_YEAR = re.compile(r'(?<!\w)(' + ORG + r')(?:\s+et\s+al\.?)?\s+(' + DATE_LABEL + r')(?=\s*[,;)])', re.I)
@@ -46,12 +47,36 @@ def joint_authorship(b):
     if len(authors)>1:
         matches=[m.group() for a in authors for m in target.finditer(a)]
         if matches:return {'raw_author_label':'; '.join(authors),'target_author':matches[0],'coauthors':authors,'basis':'structured_reference_author_list'}
+    bracketed=re.match(r'^(.{1,350}\])\.\s+',raw)
+    if bracketed and ';' in bracketed[1]:
+        parts=[p.strip() for p in bracketed[1].split(';')]
+        if all(re.fullmatch(r'[A-Za-z][A-Za-z ,&-]+\s*\[[A-Za-z][A-Za-z-]+\]',p) for p in parts):
+            matches=[m.group() for p in parts for m in target.finditer(p)]
+            if matches:return dict(raw_author_label=bracketed[1],target_author=matches[0],coauthors=parts,basis='printed_institutional_joint_signature_with_bracketed_labels')
+    # Title/year may follow a compact, explicitly joined organization signature.
+    acronym=r'[A-Z][A-Z0-9]{1,15}(?:[-/][A-Z][A-Z0-9]{1,15})*'
+    signed=re.match(r'^\s*('+acronym+r'(?:\s*(?:&|and|;)\s*'+acronym+r')+)\s*[.:]',raw)
+    if signed:
+        parts=re.split(r'\s*(?:&|and|;)\s*',signed.group(1))
+        matches=[m.group() for a in parts for m in target.finditer(a)]
+        if matches:return dict(raw_author_label=signed.group(1),target_author=matches[0],coauthors=parts,basis='printed_joint_signature_before_title')
+    compound_group=re.match(r'^\s*('+acronym+r'(?:\s*/\s*'+acronym+r')+)\s+(?:Expert|Working|Task)\s+(?:group|Group|force|Force)\s*\.',raw)
+    if compound_group:
+        parts=re.split(r'\s*/\s*',compound_group[1]);matches=[a for a in parts if re.fullmatch(ORG,a,re.I)]
+        if matches:return dict(raw_author_label=compound_group[0].strip(' .'),target_author=matches[0],coauthors=parts,basis='printed_joint_expert_group_signature')
     date=YEARS.search(raw)
     if not date or date.start()>240:return None
     prefix=raw[:date.start()].strip(' ,;.(\t\n')
+    if re.search(r'["“”]',prefix):return None  # A quoted title ends the author zone.
     # Refuse title-first prose; require an author-list connector, or a compact
     # acronym compound actually printed in the reference's author position.
     if re.search(r'\b(?:report|assessment|study|analysis|about|towards|review|based|funded|supported)\b',prefix,re.I):return None
+    if re.search(r'\.\s+[A-Z][a-z]{2,}',prefix):return None
+    if '/' in prefix and not re.search(r'https?:',prefix,re.I):
+        slash_parts=[p.strip() for p in prefix.split('/')]
+        matches=[p for p in slash_parts if re.fullmatch(ORG,p,re.I)]
+        if matches and all(re.fullmatch(r'[A-Z][A-Z0-9]{1,20}',p) or re.fullmatch(ORG,p,re.I) for p in slash_parts):
+            return dict(raw_author_label=prefix,target_author=matches[0],coauthors=slash_parts,basis='printed_acronym_and_full_organization_joint_signature')
     parts=re.split(r'\s+(?:and|with)\s+|\s*[&,;]\s*',prefix,flags=re.I)
     if len(parts)>1 and all(x.strip(' .') for x in parts):
         matches=[m.group() for a in parts for m in target.finditer(a)]
@@ -63,8 +88,29 @@ def joint_authorship(b):
     return None
 
 
+def local_author_signature(b):
+    """Local expanded institutional signatures before an explicit APA publication year."""
+    raw=b.get('raw_citation') or ''
+    date=re.search(r'\(\s*((?:19|20)\d{2}[a-z]?)\s*\)',raw)
+    if not date or date.start()>260:return None
+    prefix=raw[:date.start()].strip(' .,')
+    if re.search(r'\b(?:report|study|funded|supported|assessment|database)\b',prefix,re.I):return None
+    target=re.search(r'(?<!\w)('+ORG+r')(?!\w)',prefix,re.I)
+    abbreviations=re.findall(r'\(([A-Z][A-Z0-9\s/&-]{1,35})\)',prefix)
+    abbreviations=[re.sub(r'\s*([/-])\s*',r'\1',a).strip() for a in abbreviations]
+    if not target or not abbreviations:return None
+    # Target must be part of the signed organization itself, not arbitrary prose.
+    if not re.match(r'^\s*'+ORG+r'(?!\w)',prefix,re.I):return None
+    parts=[p.strip(' ,') for p in re.split(r'\s*(?:&|;)\s*',prefix) if p.strip(' ,')]
+    label=' & '.join(abbreviations)
+    return dict(raw_author_label=prefix,target_author=target.group(),coauthors=abbreviations,
+                local_citation_labels=[label] if len(parts)>1 else abbreviations,
+                basis='expanded_institutional_signature_with_local_parenthetical_abbreviation')
+
+
 def org_reference(b):
     """Return retrieval evidence, not an authoritative publisher/report identity."""
+    if b.get('target_identity_excluded_due_to_verified_subentry'):return None
     raw = b.get('raw_citation') or ''
     compact = re.sub(r'\s+', '', raw).lower()
     evidence = []
@@ -72,7 +118,7 @@ def org_reference(b):
     if alias_match:
         evidence.append('organization_in_reference_author_prefix')
     domains=ALIASES.get('domains',['unep.org'] if UNEP_PROFILE else [])
-    hosts=[urlsplit(u).hostname or '' for u in re.findall(r'https?://[^\s<>]+', re.sub(r'\s+','',raw),re.I)]
+    hosts=[urlsplit(u).hostname or '' for u in re.findall(r'https?://(?:(?!https?://)[^\s<>])+', ''.join(c for c in raw if not c.isspace() and unicodedata.category(c)!='Cf'),re.I)]
     if any(host==domain or host.endswith('.'+domain) for host in hosts for domain in domains):
         evidence.append('target_domain_in_reference')
     if UNEP_PROFILE and re.match(r'^Programme\s+UNE\b', raw, re.I) and re.search(r'Food waste index report\s+2024', raw, re.I):
@@ -84,12 +130,20 @@ def org_reference(b):
     publishers=ALIASES.get('publisher_aliases',['United Nations Environment Programme','United Nations Environment Program','United Nations Environmental Program','United Nations Environmental Programme'] if UNEP_PROFILE else [])
     if any(re.search(r'(?<!\w)'+alias_pattern(name)+r'(?!\w)',raw,re.I) for name in publishers) and not evidence:
         evidence.append('organization_in_bibliographic_publisher_or_title')
-    joint=joint_authorship(b)
+    # IEEE-style author, quoted title, publisher. This is publisher evidence,
+    # not a claim that a compound publisher is an institutional coauthor.
+    publisher_field=re.search(r'["”]\s*[,.;]?\s*('+ORG+r'(?:[-/][A-Za-z][A-Za-z0-9/-]*)?)\s*[,;]',raw,re.I)
+    if publisher_field and b.get('authors') and not evidence:
+        evidence.append('target_in_explicit_post_title_publisher_field')
+    place_publisher=re.search(r'\([A-Z][A-Za-z .-]{1,35}:\s*('+ORG+r')\s*\)',raw)
+    if place_publisher and not evidence:
+        evidence.append('target_in_place_publisher_field')
+    joint=local_author_signature(b) or joint_authorship(b)
     if joint:evidence.append('target_in_joint_authorship')
     compound_scope=False
     if not evidence:
         short=[re.escape(a['name']) for a in ALIASES['aliases'] if 2<=len(a['name'])<=12 and '/' not in a['name'] and '-' not in a['name']]
-        compound=re.match(r'^\s*(?:'+('|'.join(short) or r'(?!)')+r')[-/][A-Za-z][A-Za-z0-9/-]+\s*[,.(]',raw)
+        compound=re.match(r'^\s*(?:'+('|'.join(short) or r'(?!)')+r')[-/][A-Za-z][A-Za-z0-9/-]+\s*(?:[,.(]|&|and\b)',raw)
         if compound:
             evidence.append('compound_author_prefix_requires_scope_review');compound_scope=True
         else:return None
@@ -142,6 +196,14 @@ def envelope(text, start, end):
     return start, end
 
 
+def structural_cross_reference(text, start, marker):
+    """Explicit figure/table/equation callouts are not bibliography citations."""
+    if start is None or not re.fullmatch(r'\(?\d+(?:\s*[,–-]\s*\d+)*\)?', marker.strip()):
+        return False
+    prefix=text[:start]
+    return bool(re.search(r'\b(?:equations?|eqs?\.?|formulas?|figures?|figs?\.?|tables?|sections?)\s*(?:\(\d+\)(?:\s*(?:,|and|to|–|-)\s*))*$',prefix,re.I))
+
+
 def normalize(d, stem, sentence_texts=()):
     doc_id = uid('doc', d['source']['sha256'])
     refs = {b['id']: dict(b, reference_id=uid('ref', doc_id, b.get('raw_citation'), b['id']),
@@ -188,6 +250,8 @@ def normalize(d, stem, sentence_texts=()):
         if g.get('citation_validity')=='mathematical_set_membership_interval' or any(mathematical_interval(m) for m in ms):
             rejected_mentions.append({'reason':'mathematical_set_membership_interval','original_group':g})
             continue
+        if any(structural_cross_reference(paragraphs.get(m['paragraph_id'],{}).get('text',''),m['offsets']['start'],m['raw_marker']) for m in ms):
+            rejected_mentions.append({'reason':'explicit_structural_cross_reference','original_group':g});continue
         pids = {m['paragraph_id'] for m in ms}
         pid = next(iter(pids)) if len(pids) == 1 else None
         offsets = [m['offsets'] for m in ms]
@@ -211,6 +275,8 @@ def normalize(d, stem, sentence_texts=()):
         pid = m['paragraph_id']
         p = paragraphs.get(pid, {})
         a, b = m['offsets']['start'], m['offsets']['end']
+        if structural_cross_reference(p.get('text',''),a,m['raw_marker']):
+            rejected_mentions.append({'reason':'explicit_structural_cross_reference','original_mention':m});continue
         if any(span['start']<=a and b<=span['end'] for span in p.get('bibliography_spans',[])):
             rejected_mentions.append({'reason':'bibliography_entry_not_body_citation','original_mention':m});continue
         if not m['raw_marker'].strip() or a == b:
@@ -237,6 +303,7 @@ def normalize(d, stem, sentence_texts=()):
     pattern = ORG_YEAR
     if extra_labels:
         pattern = re.compile(r'\b(' + ORG + '|United Nations' + r')(?:\s*\(\s*UNEP\s*\))?\s*(?:,\s*|\.?\s*\(\s*)(' + DATE_LABEL + r')', re.I)
+        pattern=re.compile(pattern.pattern.replace(r'(?:,\s*|\.?\s*\(\s*)',r'(?:,\s*|\.?\s*\(\s*|\s+)'),re.I)
     org_unlinked = []
     for p in d['paragraphs']:
         if p['kind'] == 'head':
@@ -328,6 +395,7 @@ def unep_rows(index):
                          'report_id': None, 'report_candidate_id': ref['reference_id'], 'location_id': o['location_id'],
                          'paragraph_id': o['paragraph_id'], 'occurrence_in_paragraph': same_para.index(o)+1 if p else None,
                          'section_title': sections.get(p.get('section_id'), {}).get('title'),
+                         'citation_form':o.get('citation_form','formal_marker'), 'source_urls':ref.get('source_urls',[]), 'attribution_evidence':ref.get('attribution_evidence'),
                          'raw_marker': o['raw_marker'], 'target_marker': edge['target_marker'], 'marker_source': o['marker_source'],
                          'paragraph_text': p.get('text'), 'previous_paragraph': ps.get(p.get('previous_paragraph_id'), {}).get('text'),
                          'pdf_context':o.get('pdf_context'),'docling_table_ids':o.get('docling_table_ids',[]),

@@ -20,6 +20,8 @@ def parse_summary(paths):
    'unlinked_target_year_count':len(d.get('unresolved',{}).get('unlinked_organization_year',[])),
    'validation_errors':d['quality'].get('validation_errors',[]),
    'recall_findings':d.get('recall_audit',{}).get('findings',[]),
+   'reference_region_status':d.get('reference_region_audit',{}).get('status'),
+   'unverified_reference_entries':sum(e.get('status')=='unresolved' for e in d.get('reference_region_audit',{}).get('entries',[])),
    'context_repairs':sum(bool(r.get('context_audit',{}).get('repairs')) for r in d['target_candidates'])})
  return rows
 
@@ -45,6 +47,8 @@ def supported_findings(papers,details):
   paper=p['paper']
   if p.get('target_candidates')==0:add(paper,'zero_candidates')
   if p.get('validation_errors'):add(paper,'validation_errors','error')
+  if p.get('unverified_reference_entries'):add(paper,'unverified_reference_entries')
+  if p.get('reference_region_status')=='unavailable':add(paper,'reference_region_audit_unavailable')
   for item in p.get('recall_findings',[]):add(paper,item['code'])
  for issue in details.get('saved_workbook',{}).get('issues',[]):
   if issue['status']!='pass':add('__batch__',issue['kind'],issue['status'])

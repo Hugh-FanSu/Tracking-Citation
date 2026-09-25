@@ -87,6 +87,7 @@ def collect(paths, id_state=None):
                 date=header.find('.//t:publicationStmt/t:date[@type="published"]',ns)
                 match=re.search(r'(?:19|20)\d{2}',date.get('when','') if date is not None else '')
                 year=int(match.group()) if match else None
+        year=year or d['metadata'].get('year')
         papers.append(dict(source_paper_id=d['paper_id'],paper_id=pid,title=d['metadata'].get('title'),doi=doi,year=year,journal=journal,
                            authors='; '.join(a.get('name','') for a in d['metadata'].get('authors') or []),abstract=d['metadata'].get('abstract'),
                            source_pdf=d['source']['pdf'],source_sha256=d['source']['sha256'],file_version='原始PDF',page_count=d['page_count'],
@@ -112,6 +113,8 @@ def collect(paths, id_state=None):
             rid=match.get('catalog_resource_id') if match['status']=='matched' and not disputed else None
             title=(match.get('matched_title') or 0) if match['status']=='matched' and not disputed else 0
             notes=['机器候选；未作有效内容引用确认。','link_status='+str(r.get('link_status')),'JSON='+str(path),'reference_id='+str(r.get('report_candidate_id'))]
+            if r.get('citation_form')=='explicit_source_use_without_marker':
+                notes.append('明确使用目标数据/网站；原文无正式引用标记。来源说明为原段落证据，不是文末书目；报告未匹配填0。')
             if r.get('author_review'):
                 review=r['author_review']; result=review.get('result',{})
                 notes.append('作者角色API：'+result.get('role',review.get('status','pending'))+'；'+result.get('reason',review.get('reason',review.get('error',''))))
