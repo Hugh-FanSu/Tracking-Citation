@@ -22,3 +22,6 @@ release/
 *.zip
 *.log
 api-stages.json
+
+# Local diagnostic output
+/异常日志/

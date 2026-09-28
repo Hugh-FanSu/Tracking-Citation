@@ -72,3 +72,66 @@ class WorkerTests(unittest.TestCase):
                 with self.assertRaises((EOFError,ConnectionError)):worker.run('crash',out,log,5)
                 self.assertEqual(worker.run('four',out,log,5)['status'],'success')
             finally:worker.close()
+
+class SnapshotReuseTests(unittest.TestCase):
+    setUp=test_tool.ToolTests.setUp
+    tearDown=test_tool.ToolTests.tearDown
+    write=test_tool.ToolTests.write
+    packet=test_tool.ToolTests.packet
+    template=test_tool.ToolTests.template
+    def test_snapshot_reuse_requires_complete_unchanged_inputs(self):
+        from paper_citation_pipeline.streaming import reuse_completed_snapshot
+        template,mapping=self.template();out=self.root/'filled.xlsx'
+        config=dict(template=str(template),mapping=str(mapping),output=str(out),id_state=str(self.state))
+        one=self.write('one.json',self.packet());stream=StreamingExport(config,1);stream.advance(one)
+        reuse=lambda:reuse_completed_snapshot([one],template,mapping,out,self.state)
+        self.assertIsNone(reuse());stream.finish()
+        self.assertTrue(reuse()['reused_completed_stream_snapshot'])
+        for path in [one,template,mapping,self.state,out,out.with_suffix('.provenance.json'),out.with_suffix('.fill-manifest.json')]:
+            original=path.read_bytes();path.write_bytes(original+b' ')
+            self.assertIsNone(reuse(),str(path));path.write_bytes(original)
+        self.assertIsNone(reuse_completed_snapshot([],template,mapping,out,self.state))
+        self.assertTrue(reuse()['reused_completed_stream_snapshot'])
+
+    def test_partial_parse_failure_reuses_only_saved_papers(self):
+        from paper_citation_pipeline.streaming import reuse_completed_snapshot
+        template,mapping=self.template();out=self.root/'filled.xlsx'
+        one=self.write('one.json',self.packet())
+        stream=StreamingExport(dict(template=str(template),mapping=str(mapping),output=str(out),id_state=str(self.state)),2)
+        stream.advance(one);stream.advance(self.root/'missing.json',True);stream.finish()
+        self.assertIsNotNone(reuse_completed_snapshot([one],template,mapping,out,self.state))
+
+    def test_language_exclusion_is_not_exported_or_counted_as_failure(self):
+        template,mapping=self.template();out=self.root/'filled.xlsx'
+        stream=StreamingExport(dict(template=str(template),mapping=str(mapping),output=str(out),id_state=str(self.state)),2)
+        before=self.state.read_bytes()
+        stream.advance(self.root/'portuguese.json',skipped=True)
+        self.assertFalse(out.exists());self.assertEqual(before,self.state.read_bytes())
+        stream.advance(self.write('english.json',self.packet()));stream.finish()
+        progress=json.loads(out.with_suffix('.progress.json').read_text())
+        self.assertEqual((progress['processed'],progress['succeeded'],progress['excluded'],progress['failed']),(2,1,1,0))
+        events=json.loads(out.with_suffix('.checkpoints.json').read_text())['events']
+        self.assertEqual(events[0]['status'],'excluded')
+
+    def test_all_non_english_batch_exports_empty_template_and_exclusion_log(self):
+        import pymupdf
+        from test_language import PT
+        from paper_citation_pipeline.cli import main
+        template,mapping=self.template();cache=self.root/'cache';(cache/'json').mkdir(parents=True)
+        pdf=self.root/'portuguese.pdf';doc=pymupdf.open()
+        for _ in range(3):doc.new_page().insert_textbox(pymupdf.Rect(40,100,550,700),PT,fontsize=11)
+        doc.save(pdf);doc.close()
+        (cache/'json/portuguese.json').write_text(json.dumps({'source':{'pdf':str(pdf)}}))
+        before=self.state.read_bytes();out=self.root/'results'
+        status=main(['run','--parser-output',str(cache),'--output',str(out),'--target','UNEP',
+            '--id-state',str(self.state),'--template',str(template),'--mapping',str(mapping)])
+        self.assertEqual(status,0);self.assertEqual(before,self.state.read_bytes())
+        self.assertFalse(list((out/'json').glob('*.json')))
+        self.assertEqual(json.loads((out/'manifest.json').read_text())[0]['readiness'],'excluded')
+        self.assertEqual(json.loads((out/'citations.provenance.json').read_text())['counts']['citations'],0)
+        issues=json.loads((out/'exceptions.json').read_text())['issues']
+        self.assertEqual(issues[0]['kind'],'非英语论文已排除')
+        self.assertFalse(any(i['severity']=='error' for i in issues))
+
+        progress=json.loads((out/'citations.progress.json').read_text())
+        self.assertEqual((progress['succeeded'],progress['excluded'],progress['failed']),(0,1,0))

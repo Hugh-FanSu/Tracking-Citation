@@ -1,6 +1,7 @@
 """Restore printed superscript groups, including ranges wrapped onto the next line."""
 import re
 import pymupdf
+from pdf_evidence import open_document
 from pipeline import numbers
 
 
@@ -9,7 +10,7 @@ def recover(pdf,data):
     for m in data['citation_mentions']:
         if m.get('style')=='numeric':
             for c in m.get('coordinates',[]):by_page.setdefault(c['page'],[]).append((m,c))
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         for n,page in enumerate(doc,1):
             if n not in by_page:continue
             for block in [dict(lines=[line for b in page.get_text('dict')['blocks'] for line in b.get('lines',[])])]:

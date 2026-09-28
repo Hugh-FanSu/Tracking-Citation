@@ -45,6 +45,12 @@ def collect_exceptions(output,target=None,input_dir=None,extra=(),workbook=None)
         if row.get('readiness')=='failed':
             issues.append(dict(kind='论文处理失败',stage='解析',paper=paper,file=file,severity='error',reason='；'.join(map(str,row.get('validation_errors',[]))) or '未能生成可用结构化结果',action='检查PDF是否可读取、GROBID/Docling状态及该论文运行日志。'))
             continue
+        if row.get('readiness')=='excluded':
+            uncertain=row.get('exclusion_reason')=='language_undetermined'
+            issues.append(dict(kind='语种待确认，未纳入' if uncertain else '非英语论文已排除',stage='语种筛选',
+                paper=paper,file=file,severity='warning' if uncertain else 'info',
+                reason=str(row.get('language',{})),action='检查文字层或OCR后重试。' if uncertain else '按仅英语规则排除，无需处理引用。'))
+            continue
         count=row.get('target_candidates')
         packet=output/'json'/(paper+'.json')
         if not packet.is_file():
@@ -52,6 +58,8 @@ def collect_exceptions(output,target=None,input_dir=None,extra=(),workbook=None)
         try:
             packet_data=read_json(packet)
             if count is None:count=len(packet_data['target_candidates'])
+            for blocker in packet_data.get('local_verification',{}).get('blockers',[]):
+                issues.append(dict(kind='本地证据核验未通过，暂不可交付',stage='删除PDF前检查',paper=paper,file=str(packet),severity='warning',reason=str(blocker),action='保留PDF；查看local_verification和semantic-review中的证据与失败原因。'))
             for finding in packet_data.get('recall_audit',{}).get('findings',[]):
                 issues.append(dict(kind='引用覆盖检查未通过',stage='目标匹配',paper=paper,file=str(packet),severity='warning',reason=str(finding),action='检查标记与名称变体；已有一次命中不代表重复引用均已关联。'))
             audit=packet_data.get('reference_region_audit',{})

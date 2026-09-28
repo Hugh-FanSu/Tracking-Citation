@@ -4,6 +4,7 @@ import hashlib
 import re
 import unicodedata
 import pymupdf
+from pdf_evidence import open_document
 from standardize_citations import ORG_PREFIX,ORG_YEAR,org_reference
 
 
@@ -149,7 +150,7 @@ def recover(pdf,data):
     if not document:return []
     existing=[compact(b.get('raw_citation') or '') for b in data['bibliography']]
     changes=[];in_references=False;seen_references=False
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         # Docling can mislabel repeated page headers as section headings.
         margins={}
         for text in document.get('texts',[]):
@@ -167,6 +168,11 @@ def recover(pdf,data):
                 if in_references:audit['status']='checked';seen_references=True
                 continue
             if item.get('label') not in {'list_item','text','reference'}:continue
+            # A printed number may be fused into Docling's text, not its marker.
+            inline_label=re.match(r'^(\d{1,3}\.)\s*(?=[A-Z])',raw)
+            if inline_label and not item.get('marker'):
+                raw=raw[inline_label.end():]
+                item=dict(item,text=raw,marker=inline_label[1])
             if not in_references:
                 # Two-column end matter may interleave publisher notes into the
                 # reference reading order. Require an independent GROBID region.
@@ -214,6 +220,17 @@ def recover(pdf,data):
                 entry.update(status='present', reason='matched_existing_reference_at_verified_pdf_location',
                              reference_id=present['id'], pdf_text_evidence=evidence,
                              verification_scope='existing_reference_presence_only')
+                # Correct only an absent/author-only title after independent
+                # region verification; retain the original parser object.
+                author=ORG_PREFIX.match(raw)
+                old_title=present.get('title') or ''
+                if author and (not old_title or presence_text(old_title)==presence_text(author[1])):
+                    tail=raw[author.end():]
+                    if tail.startswith('.') and re.search(r'[,;.]\s*(?:19|20)\d{2}\.?\s*$',raw):
+                        title=re.split(r'\.\s+',tail.lstrip('. '),maxsplit=1)[0].strip(' .')
+                        if len(title)>=8 and not re.fullmatch(r'(?:19|20)\d{2}',title):
+                            present['title']=title
+                            changes.append(dict(kind='repair_author_only_reference_title',reference_id=present['id'],original_title=old_title,title=title,pdf_text_evidence=evidence,method='verified_author_period_title_period_publisher_year'))
                 for p in data['paragraphs']:mark_reference_span(p,present['raw_citation'],item['self_ref'])
                 continue
             if not coords or (compact(raw) not in compact(' '.join(evidence)) and not (len(presence_text(raw))>=60 and presence_text(raw) in presence_text(' '.join(evidence)))):

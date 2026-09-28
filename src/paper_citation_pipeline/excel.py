@@ -78,7 +78,7 @@ def collect(paths, id_state=None):
         target=d.get('target',{}).get('canonical_name') or next((r.get('organization_name_canonical') for r in d['target_candidates']),None)
         targets.add(target)
         idx=d['citation_index'];ps={p['id']:p for p in idx['contexts']};sections={s['id']:s for s in idx['sections']};refs={r['reference_id']:r for r in idx['references']};occ={o['location_id']:o for o in idx['occurrences']}
-        doi=year=journal=None
+        doi=d['metadata'].get('doi');year=None;journal=d['metadata'].get('journal')
         tei=d.get('provenance',{}).get('artifacts',{}).get('tei',{}).get('path')
         if tei and Path(tei).is_file():
             header=ET.parse(tei).find('.//t:teiHeader',ns)
@@ -106,6 +106,8 @@ def collect(paths, id_state=None):
             sec=sections.get(ps.get(r.get('paragraph_id'),{}).get('section_id'),{});chain=[];visited=set()
             while sec and sec['id'] not in visited:
                 chain.insert(0,((sec.get('number') or '')+' '+(sec.get('title') or '')).strip());visited.add(sec['id']);sec=sections.get(sec.get('parent_id'),{})
+            if r.get('section_title_source')=='pdf_verified_docling_heading' and r.get('section_title'):
+                chain=[r['section_title']]
             coords=r.get('coordinates') or r.get('context_coordinates') or []
             pages=sorted({c['page'] for c in coords})
             match=r.get('report_match',{'status':'not_searched'})
@@ -119,7 +121,7 @@ def collect(paths, id_state=None):
                 review=r['author_review']; result=review.get('result',{})
                 notes.append('作者角色API：'+result.get('role',review.get('status','pending'))+'；'+result.get('reason',review.get('reason',review.get('error',''))))
             if r.get('joint_authorship'):
-                notes.append('按共同/复合署名规则纳入；保留原始署名：'+r['joint_authorship']['raw_author_label'])
+                notes.append('按共同/复合署名规则纳入；保留原始署名：'+(r['joint_authorship'].get('raw_author_label') or '; '.join(r['joint_authorship'].get('coauthors',[]))))
             if r.get('report_identity_status')=='candidate_related_organization_scope':
                 notes.append('组织统计范围待确认：复合署名仅与目标简称共享前缀，不代表已确认是目标组织别名。原署名见原始参考文献。')
             if r.get('resource_type')=='document_identifier_unresolved':

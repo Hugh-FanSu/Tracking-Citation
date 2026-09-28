@@ -65,6 +65,17 @@ print(json.dumps([r['organization_id'] for r in unep_rows(normalize(d,'p'))]))
         ws=load_workbook(out).active
         self.assertEqual(ws['B2'].value,'=not_a_formula');self.assertEqual(ws['B2'].data_type,'s');self.assertEqual(ws['C2'].value,'待核实');self.assertEqual(ws.freeze_panes,'B2')
         with self.assertRaises(FileExistsError):export_packets([packet],template,mapping,out,id_state=self.state)
+    def test_verified_context_heading_reaches_export(self):
+        from paper_citation_pipeline.excel import collect
+        d=self.packet();d['citation_index']['contexts'][0]['section_id']='s'
+        d['citation_index']['sections']=[dict(id='s',title='Article title',parent_id=None)]
+        d['target_candidates'][0].update(section_title='INTRODUCTION',section_title_source='pdf_verified_docling_heading')
+        data=collect([self.write('p.json',d)])
+        self.assertEqual(data['citations'][0]['section_title'],'INTRODUCTION')
+        self.assertEqual(data['citations'][0]['part'],'引言')
+        d['target_candidates'][0].pop('section_title_source')
+        self.assertEqual(collect([self.write('p.json',d)])['citations'][0]['section_title'],'Article title')
+
     def test_cannot_overwrite_template(self):
         t,m=self.template()
         with self.assertRaises(ValueError):export_packets([],t,m,t,True,id_state=self.state)

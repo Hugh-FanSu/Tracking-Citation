@@ -1,7 +1,7 @@
 """Independent PDF author/year inventory; flags gaps, never invents citation edges."""
 import re
 from collections import Counter
-from standardize_citations import ORG_YEAR,ALIASES
+from standardize_citations import ORG_YEAR,ORG,ALIASES
 from context_repair import charmap,letters
 
 def audit(pages,index,rows):
@@ -43,6 +43,27 @@ def audit(pages,index,rows):
         if not linked:
             findings.append({'code':'target_reference_without_body_link','reference_id':r['reference_id'],
                              'reason':'Target reference exists but has no linked occurrence; bibliography-only or missed citation requires distinction'})
+    # A third-party title about the target is not proof of target authorship.
+    # Keep its linked occurrences visible for possible secondary-source use.
+    for r in index['references']:
+        if r.get('target_identity_excluded_due_to_verified_subentry'):continue
+        if r.get('organization_candidate') or not re.search(r'(?<!\w)(?:'+ORG+r')(?!\w)',r.get('title') or '',re.I):continue
+        linked=[o for o in index.get('occurrences',[]) if any(l['reference_id']==r['reference_id'] for l in o['links'])]
+        # GROBID can retain the marker but omit its edge. Record a possible
+        # local author/year match for audit only; do not manufacture an edge.
+        family=(r.get('authors') or [{}])[0].get('family') or ''
+        year=str(r.get('year_label') or r.get('year') or '')
+        possible=[]
+        if family and year:
+            pattern=re.compile(r'(?<!\w)'+re.escape(family)+r'\s*,?\s*'+re.escape(year)+r'(?!\w)',re.I)
+            possible=[o for o in index.get('occurrences',[]) if not o['links'] and pattern.search(o['raw_marker'])]
+        if linked or possible:
+            findings.append(dict(code='target_named_in_third_party_source',reference_id=r['reference_id'],
+                raw_reference=r.get('raw_citation'),location_ids=[o['location_id'] for o in linked],
+                markers=[o['raw_marker'] for o in linked],
+                possible_unlinked_locations=[{'location_id':o['location_id'],'marker':o['raw_marker'],
+                    'paragraph_id':o.get('paragraph_id'),'coordinates':o.get('coordinates',[])} for o in possible],
+                reason='Target appears in a third-party source title; possible indirect use requires classification, not target authorship'))
     counts=Counter((x['page'],x['year']) for x in inventory)
     for (page,year),count in counts.items():
         linked={r['location_id'] for r in rows if r.get('year_label_from_raw')==year and page in r.get('pdf_pages',[])}

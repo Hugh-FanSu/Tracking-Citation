@@ -1,12 +1,13 @@
 """Conservative first-page metadata repair; keep original parser packet untouched."""
 import re
 import pymupdf
+from pdf_evidence import open_document
 from target_recovery import coord
 
 
 def repair_metadata(pdf,data):
     metadata={k:data.get(k) for k in ('title','authors','abstract')};changes=[]
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         page=doc[0];blocks=[b for b in page.get_text('blocks') if b[6]==0]
         title=metadata.get('title') or ''
         if title.endswith('Check for updates') and any(b[4].strip()=='Check for updates' for b in blocks):
@@ -35,6 +36,21 @@ def repair_metadata(pdf,data):
         if issue_years:years=issue_years  # Printed issue date takes precedence over copyright.
         if len(years)==1:
             metadata['year']=years.pop();changes.append(dict(kind='metadata_publication_year_from_first_page_evidence',new=metadata['year'],evidence=[dict(text=b[4],coordinates=[coord(1,b[:4])]) for b in footer+extra_evidence]))
+        if not metadata.get('year'):
+            # Repeated running issue headers are evidence; a thesis/submission
+            # date in a first-page acknowledgment is not the publication year.
+            headers={}
+            for pn in range(1,min(len(doc),6)):
+                pg=doc[pn]
+                for block in pg.get_text('blocks'):
+                    if block[6]!=0 or block[1]>=pg.rect.height*.12:continue
+                    text=' '.join(block[4].split())
+                    m=re.search(r'\(((?:19|20)\d{2})\)\s+(\d{1,3})\s+([A-Z][A-Z.]{2,14})(?:\s|$)',text)
+                    if m:headers.setdefault(m.groups(),[]).append(dict(text=block[4],coordinates=[coord(pn+1,block[:4])]))
+            supported=[(key,ev) for key,ev in headers.items() if len({x['coordinates'][0]['page'] for x in ev})>=2]
+            if len(supported)==1:
+                key,ev=supported[0];metadata['year']=int(key[0])
+                changes.append(dict(kind='metadata_publication_year_from_repeated_issue_headers',new=metadata['year'],evidence=ev))
         if not metadata.get('abstract'):
             candidates=[b for b in blocks if b[2]-b[0]>.65*page.rect.width and .12*page.rect.height<b[1]<.65*page.rect.height and 500<len(b[4])<4000 and re.search(r'\b(?:We|Our|This study)\b',b[4])]
             candidates=[b for b in candidates if not any(re.match(r'^(?:1[. ]+)?(?:Introduction|Methods|Results)\s*$', h[4].strip(), re.I) and h[1]<b[1] for h in blocks)]

@@ -2,6 +2,7 @@
 import re
 import unicodedata
 import pymupdf
+from pdf_evidence import open_document
 
 def letters(text):
     text=re.sub(r'\[\s*\d+(?:\s*[,;–—-]\s*\d+)*\s*\]','',text)
@@ -18,7 +19,7 @@ def repair_contexts(pdf,index,rows,document):
     contexts={p['id']:p for p in index['contexts']}
     blocks=[letters(t.get('text','')) for t in document.get('texts',[]) if t.get('label')=='text']
     changes=[]
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         lines={}
         for n,page in enumerate(doc,1):
             lines[n]=[{'text':''.join(s['text'] for s in l['spans']),'rect':pymupdf.Rect(l['bbox'])}
@@ -75,9 +76,73 @@ def repair_contexts(pdf,index,rows,document):
             raw=' '.join(l['text'].strip() for _,part in groups for l in part)
             if not valid or letters(raw)!=letters(block.get('text','')):continue
             verified.append((block,groups,letters(raw)))
+        # Verify unfinished Docling fragments once; they may be the missing
+        # opening of a paragraph spanning columns and then a page boundary.
+        fragments=[]
+        for block in document.get('texts',[]):
+            prov=block.get('prov',[])
+            if block.get('label')!='text' or len(prov)!=1:continue
+            n=prov[0].get('page_no');box=prov[0].get('bbox',{})
+            if not n or n>len(doc) or not all(k in box for k in ('l','r','t','b')):continue
+            top,bottom=box['t'],box['b']
+            if box.get('coord_origin','BOTTOMLEFT')=='BOTTOMLEFT':top,bottom=doc[n-1].rect.height-top,doc[n-1].rect.height-bottom
+            rect=pymupdf.Rect(box['l'],top,box['r'],bottom)
+            part=[l for l in lines[n] if (l['rect'] & rect).get_area()/max(l['rect'].get_area(),.01)>.6]
+            part.sort(key=lambda l:(round(l['rect'].y0,1),l['rect'].x0))
+            if len(part)<2 or letters(' '.join(l['text'] for l in part))!=letters(block.get('text','')):continue
+            fragments.append((block,n,part))
         for row in rows:
             p=contexts.get(row.get('paragraph_id'))
             if not p:continue
+            ordered=selected(p)
+            if ordered and p['text'][:1].islower():
+                n,first=ordered[0];page_rect=doc[n-1].rect
+                width=max(l['rect'].width for pn,l in ordered if pn==n)
+                # First column at the top of a page; previous reading column
+                # must end near the bottom, in the same body size, mid-sentence.
+                if n>1 and first['rect'].y0<.18*page_rect.height and first['rect'].x0<page_rect.width/2:
+                    def tail_ok(fragment):
+                        block,pn,part=fragment;last=part[-1]['rect']
+                        return (not re.search(r'[.!?][”"\']?\s*$',block['text'])
+                            and last.y1>.82*doc[pn-1].rect.height
+                            and .8*width<=max(l['rect'].width for l in part)<=1.2*width
+                            and last.width>.85*max(l['rect'].width for l in part)
+                            and .8*first['rect'].height<=last.height<=1.2*first['rect'].height)
+                    tails=[f for f in fragments if f[1]==n-1 and tail_ok(f)]
+                    # Rightmost column ends the preceding page's reading order.
+                    if tails:
+                        right=max(l['rect'].x0 for l in lines[n-1] if l['rect'].y0>.8*doc[n-2].rect.height and l['rect'].width>.6*width)
+                        tails=[f for f in tails if abs(f[2][0]['rect'].x0-right)<3]
+                    if len(tails)==1:
+                        chain=[tails[0]];block,pn,part=tails[0]
+                        if block['text'][:1].islower() and part[0]['rect'].x0>doc[pn-1].rect.width/2:
+                            earlier=[f for f in fragments if f[1]==pn and f[2][0]['rect'].x0<doc[pn-1].rect.width/2
+                                     and tail_ok(f) and abs(f[2][-1]['rect'].y1-part[-1]['rect'].y1)<2*first['rect'].height]
+                            if len(earlier)==1:chain.insert(0,earlier[0])
+                        # Do not publish another incomplete opening.
+                        if chain[0][0]['text'][:1].isupper():
+                            original={k:row.get(k) for k in ('paragraph_text','section_title')}
+                            text=' '.join([f[0]['text'] for f in chain]+[p['text']])
+                            row['paragraph_text']=re.sub(r'(?<=\w)[-\u00ad]\s+(?=\w)','',text)
+                            opening,pn,part=chain[0]
+                            headings=[]
+                            for h in document.get('texts',[]):
+                                if h.get('label')!='section_header' or len(h.get('prov',[]))!=1:continue
+                                hp=h['prov'][0];hb=hp.get('bbox',{})
+                                if hp.get('page_no')!=pn or not all(k in hb for k in ('t','b','l')):continue
+                                hy=doc[pn-1].rect.height-hb['b'] if hb.get('coord_origin','BOTTOMLEFT')=='BOTTOMLEFT' else hb['b']
+                                if 0<part[0]['rect'].y0-hy<70 and abs(hb['l']-min(l['rect'].x0 for l in part))<5:headings.append((hy,h['text']))
+                            if headings:
+                                row['section_title']=max(headings)[1]
+                                row['section_title_source']='pdf_verified_docling_heading'
+                            change=dict(kind='restore_verified_previous_page_opening',record_id=row['record_id'],original=original,
+                                evidence={'docling_ids':[f[0].get('self_ref') for f in chain],
+                                          'segments':[{'page':f[1],'lines':[list(l['rect']) for l in f[2]]} for f in chain],
+                                          'pdf_text_exact_normalized':True})
+                            changes.append(change)
+                            row['context_audit']={'status':'layout_repaired','scope':'reading context only; original index offsets retained','repairs':[change]}
+                            row['context_completeness']='pdf_layout_reconstructed_not_semantically_certified'
+                            continue
             offset=row.get('offsets',{}).get('start')
             anchor=p['text'][max(0,(offset or 0)-65):(offset or 0)+100]
             needle=letters(anchor)

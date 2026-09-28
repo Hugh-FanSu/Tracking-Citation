@@ -111,7 +111,8 @@ class Workbench(App):
         self.resume_button=ttk.Button(actions,text='继续已有项目',style='Quiet.TButton',command=self.resume);self.resume_button.pack(side='left')
         self.stop_button=ttk.Button(actions,text='停止',style='Quiet.TButton',command=self.stop,state='disabled');self.stop_button.pack(side='left',padx=8)
         footer=tk.Frame(main,bg=self.BG);footer.pack(fill='x',pady=(12,0))
-        self.open_excel=ttk.Button(footer,text='打开 Excel',style='Quiet.TButton',command=lambda:self.open_result(True),state='disabled');self.open_excel.pack(side='left')
+        self.delivery_button=ttk.Button(footer,text='交付包状态',style='Quiet.TButton',command=self.show_delivery);self.delivery_button.pack(side='left',padx=6)
+        self.open_excel=ttk.Button(footer,text='打开本地 Excel',style='Quiet.TButton',command=lambda:self.open_result(True),state='disabled');self.open_excel.pack(side='left')
         self.open_folder=ttk.Button(footer,text='结果文件夹',style='Quiet.TButton',command=lambda:self.open_result(False),state='disabled');self.open_folder.pack(side='left',padx=8)
         self.exception_button=ttk.Button(footer,text='异常日志',style='Quiet.TButton',command=self.open_exceptions);self.exception_button.pack(side='left',padx=6)
         ttk.Button(footer,text='运行日志',style='Quiet.TButton',command=self.show_logs).pack(side='right')
@@ -181,7 +182,7 @@ class Workbench(App):
         try:
             d=check(self.prefs['id_state']);self.number_label.set(f'编号自动续接  ·  论文已用 {d["paper"]["current"]}  /  记录已用 {d["record"]["current"]}')
         except (ValueError,OSError,KeyError):self.number_label.set('首次使用请在「编号管理」载入已有编号，或填写起始号码。')
-        self.ai_label.set('API Key 已填入，仅本次有效。' if self.api_key else '填入Key后，内部限额检查自动运行。')
+        self.ai_label.set('API Key 已填入，仅本次有效。' if self.api_key else '填入Key后核验书目和引用上下文；无Key仅生成待核验结果。')
     def open_templates(self):
         p=organization_dir(self.prefs['template_dir'],self.prefs['organization'])
         if p.exists():launch_path(p)
@@ -197,7 +198,7 @@ class Workbench(App):
         win,body=self.dialog('接口设置');tk,ttk=self.tk,self.ttk
         key=tk.StringVar(value=self.api_key);model=tk.StringVar(value=self.prefs['model']);endpoint=tk.StringVar(value=self.prefs['endpoint'])
         self.dialog_field(body,'模型名称',model);self.dialog_field(body,'API 地址（已填入智谱标准接口，可改其他兼容服务）',endpoint)
-        hint=tk.StringVar(value='保留接口配置供后续使用。解析、填表、异常环节各自动调用一次（每10篇一组），无自动重试。')
+        hint=tk.StringVar(value='用于本地书目与上下文证据核验，每篇有固定请求与用量上限；失败不自动重试。未完成核验时不会生成交付包。')
         self.label(body,hint,bg=self.BG,wraplength=580).pack(anchor='w',pady=16)
         def settings():
             cfg={'endpoint':endpoint.get().strip(),'model':model.get().strip()}
@@ -324,6 +325,10 @@ class Workbench(App):
                     self.api_entry.configure(state='normal');self.template_button.configure(state='normal')
                     self.org_select.configure(state='readonly');self.alias_select.configure(state='readonly');self.reload_bundle()
                     self.refresh_summary();self.refresh_result_buttons()
+                    try:
+                        out,_=self.result_paths();delivery=read_json(out/'upload-readiness.json')
+                        self.status.set('本地核验通过，交付包已生成。' if delivery.get('status')=='ready' else '本地结果已保存；核验尚未通过，请保留PDF。')
+                    except (OSError,ValueError,KeyError):pass
         except queue.Empty:pass
         if self.project and (self.project/'run.json').exists():
             try:
@@ -335,6 +340,23 @@ class Workbench(App):
                     if self.running and d.get('current_paper'):self.status.set(d['stage']+'：'+d['current_paper'])
             except (OSError,ValueError,KeyError):pass
         self.root.after(300,self.poll)
+    def show_delivery(self):
+        out,_=self.result_paths()
+        path=out/'upload-readiness.json' if out else None
+        if not path or not path.exists():
+            self.messagebox.showinfo('本地交付检查','尚未完成核验。请保留原PDF。');return
+        report=json.loads(path.read_text(encoding='utf-8'))
+        package=report.get('package')
+        if report.get('status')=='ready' and package:
+            from .config import digest
+            if not Path(package).is_file() or digest(Path(package))!=report.get('package_sha256'):
+                self.messagebox.showerror('交付包不可用','交付包缺失或已改变，请重新生成。');return
+            launch_path(Path(package).parent)
+            self.messagebox.showinfo('交付包已生成','本地检查通过。上传包包含压缩JSON和总表，不含PDF。\n这不是95%准确率认证，软件不会删除PDF。')
+        else:
+            self.messagebox.showwarning('暂不可交付','仍有未核验或未解决的问题，请保留PDF。\n查看 upload-readiness.json 和异常日志。')
+            launch_path(path)
+
     def refresh_result_buttons(self):
         try:
             out,xlsx=self.result_paths()

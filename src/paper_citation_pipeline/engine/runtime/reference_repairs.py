@@ -4,6 +4,7 @@ Only modifies a working copy; original parser JSON remains the evidence of extra
 import copy
 import re
 import pymupdf
+from pdf_evidence import open_document
 from standardize_citations import ORG
 
 YEAR=re.compile(r'\b(?:19|20)\d{2}[a-z]?\b')
@@ -24,7 +25,7 @@ def local_metadata(parent,text,prefix):
 
 def repair(pdf,data):
     result=copy.deepcopy(data); corrections=[]
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         page_lines={}
         for b in result['bibliography'][:]:
             raw=b.get('raw_citation') or ''
@@ -90,7 +91,7 @@ def repair(pdf,data):
     from docling_bibliography import recover
     corrections.extend(recover(pdf,result))
     # Check the exact PDF location, rather than a context window containing other brackets.
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         for g in result.get('pdf_citation_groups',[])+result.get('recovered_pdf_table_citation_groups',[]):
             if not g.get('bboxes') or not 1<=g.get('page',0)<=len(doc):continue
             x,y,r,b=g['bboxes'][0]

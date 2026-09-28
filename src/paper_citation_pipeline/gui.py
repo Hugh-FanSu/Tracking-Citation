@@ -58,7 +58,7 @@ class App:
         style=ttk.Style(root);style.configure('Title.TLabel',font=('',23,'bold'));style.configure('Sub.TLabel',foreground='#586475')
         outer=ttk.Frame(root,padding=22);outer.pack(fill='both',expand=True)
         ttk.Label(outer,text='论文 → 引用证据 → Excel',style='Title.TLabel').pack(anchor='w')
-        ttk.Label(outer,text='选择文件，填写目标。解析、编号和填表在后台完成。',style='Sub.TLabel').pack(anchor='w',pady=(7,16))
+        ttk.Label(outer,text='仅处理英语论文。非英语自动排除，解析、编号和填表在后台完成。',style='Sub.TLabel').pack(anchor='w',pady=(7,16))
         self.tabs=ttk.Notebook(outer);self.tabs.pack(fill='both',expand=True)
         settings=ttk.Frame(self.tabs,padding=14);self.monitor=ttk.Frame(self.tabs,padding=14)
         self.tabs.add(settings,text='  配置任务  ');self.tabs.add(self.monitor,text='  运行进度与结果  ')
@@ -196,7 +196,7 @@ class App:
                     if not path.exists():continue
                     d=json.loads(path.read_text(encoding='utf-8'));total=d['total'];done=d['processed']
                     self.bars[i]['value']=100*done/total if total else 0
-                    self.labels[i].set(f'{done} / {total} 篇 · 成功 {d["succeeded"]} · 失败 {d["failed"]}'+(' · '+d['current_paper'] if d.get('current_paper') else ''))
+                    self.labels[i].set(f'{done} / {total} 篇 · 成功 {d["succeeded"]} · 排除 {d.get("excluded",0)} · 失败 {d["failed"]}'+(' · '+d['current_paper'] if d.get('current_paper') else ''))
                     if self.running:self.status.set('正在解析与生成结果，请保持窗口打开。')
             except (OSError,ValueError,KeyError):pass
         self.root.after(300,self.poll)

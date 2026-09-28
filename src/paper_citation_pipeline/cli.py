@@ -32,7 +32,7 @@ def _run(options):
             values[key]=(origin/values[key]).resolve()
     from .numbering import check
     check(values.get('id_state'))
-    # Legacy ai_config is ignored: batch processing never invokes model APIs.
+    # Legacy ai_config is ignored; api_config enables bounded evidence review.
     cfg=target_config(values.get('target'),values.get('aliases'),values.get('kind') or 'organization')
     if not values.get('output'):raise ValueError('--output is required')
     if bool(values.get('input'))==bool(values.get('parser_output')):raise ValueError('Specify exactly one of --input and --parser-output')
@@ -64,6 +64,7 @@ def _run(options):
     snapshot=out/'target.json'
     if snapshot.exists() and read_json(snapshot)!=cfg:raise ValueError('Output belongs to a different target/config; choose a new output directory')
     out.mkdir(parents=True,exist_ok=True);dump(snapshot,cfg)
+    dump(out/'upload-readiness.json',{'status':'running','package':None,'automatic_pdf_deletion_allowed':False})
     dump(out/'run_config.json',{**{k:str(v) if isinstance(v,Path) else v for k,v in values.items()},'version':__version__,
                               'template_sha256':digest(template) if template else None,'mapping_sha256':digest(mapping) if mapping else None})
     command=[sys.executable,'-B',str(HERE/'engine/convert_batch.py'),'--output',str(out),
@@ -72,10 +73,10 @@ def _run(options):
     for key in ['resume','ocr','expect_target']:
         if values.get(key):command.append('--'+key.replace('_','-'))
     if values.get('catalog_json'):command+=['--catalog-json',str(values['catalog_json'])]
-    monitor=None
+    # Routine mapping checks stay deterministic; token budget goes to source evidence.
     if values.get('api_config'):
-        from .stage_monitor import StageMonitor
-        monitor=StageMonitor(values['api_config'],out)
+        from .ai_review import config as load_api_config
+        load_api_config(values['api_config'])
     if template:
         stream_config=out/'stream-export.json'
         dump(stream_config,dict(template=str(template),mapping=str(mapping),output=str(xlsx),id_state=str(values['id_state']),overwrite=bool(options.overwrite_excel)))
@@ -90,26 +91,24 @@ def _run(options):
         missing={p.stem for p in selected}-{x['paper'] for x in manifest}
         for name in sorted(missing):manifest.append({'paper':name,'readiness':'failed','validation_errors':['No current parser packet produced; see logs']})
         if missing:dump(out/'manifest.json',manifest);status=1
-    packets=[out/'json'/(r['paper']+'.json') for r in manifest if r['readiness']!='failed']
-    if monitor:
-        from .stage_monitor import parse_summary
-        stage_papers=parse_summary(packets)
-        monitor.run('parsing',stage_papers,{'input_papers':len(manifest),'failed_papers':sum(r['readiness']=='failed' for r in manifest)})
+    packets=[out/'json'/(r['paper']+'.json') for r in manifest if r['readiness'] not in {'failed','excluded'}]
     if template:
         from .excel import export_packets
-        packets=[out/'json'/(r['paper']+'.json') for r in manifest if r['readiness']!='failed']
-        if packets:print(json.dumps(export_packets(packets,template,mapping,xlsx,True,id_state=values['id_state']),ensure_ascii=False))
+        packets=[out/'json'/(r['paper']+'.json') for r in manifest if r['readiness'] not in {'failed','excluded'}]
+        if packets:
+            from .streaming import reuse_completed_snapshot
+            summary=reuse_completed_snapshot(packets,template,mapping,xlsx,values['id_state'])
+            if summary is None:summary=export_packets(packets,template,mapping,xlsx,True,id_state=values['id_state'])
+            print(json.dumps(summary,ensure_ascii=False))
+        elif manifest and all(r['readiness']=='excluded' for r in manifest):
+            from .streaming import QuietProgress
+            export_packets([],template,mapping,xlsx,True,id_state=values['id_state'],progress=QuietProgress())
         else:raise ValueError('No usable packets available for Excel export')
         from .quality import review_workbook
-        status=review_workbook(xlsx,expected_papers=len(manifest)) or status
-        if monitor:
-            from .stage_monitor import filled_summary
-            monitor.run('filling',stage_papers,{'mapping':read_json(mapping),'saved_workbook':filled_summary(xlsx)})
-    if monitor:
-        from collections import Counter
-        quality=read_json(xlsx.with_suffix('.quality.json')) if template else {}
-        monitor.run('exceptions',stage_papers,{'local_check_status':quality.get('status'),'issues':dict(Counter(c['kind'] for c in quality.get('checks',[]) if c['status']!='pass'))})
-        if monitor.failed:status=status or 1
+        status=review_workbook(xlsx,expected_papers=sum(r['readiness']!='excluded' for r in manifest)) or status
+    from .delivery import prepare_delivery
+    delivery=prepare_delivery(out,packets,xlsx if template else None)
+    print('本地交付检查：'+('通过，上传包已生成' if delivery['status']=='ready' else '未通过；本地结果已保存，请勿删除PDF')+'；详见 upload-readiness.json',flush=True)
     return status
 
 def run(options):
@@ -164,6 +163,10 @@ def main(argv=None):
     p.add_argument('--ai-config',type=Path)
     p=commands.add_parser('check-api',help='Administrator-only explicit minimal API diagnostic; never run by the GUI or batches')
     p.add_argument('--api-config',required=True,type=Path);p.add_argument('--output',required=True,type=Path)
+    p=commands.add_parser('prepare-upload',help='Verify local evidence and workbook, create JSON+Excel ZIP without PDF; never uploads or deletes')
+    p.add_argument('--output',required=True,type=Path);p.add_argument('--workbook',required=True,type=Path)
+    p=commands.add_parser('decode-cloud',help='Decode a self-contained cloud JSON archive without the original PDF')
+    p.add_argument('archive',type=Path);p.add_argument('--output',required=True,type=Path)
     p=commands.add_parser('validate');p.add_argument('packets',type=Path)
     p=commands.add_parser('install-skill',help='Install bundled skill instructions; pip itself does not edit agent settings')
     p.add_argument('--path',type=Path);p.add_argument('--force',action='store_true')
@@ -194,6 +197,17 @@ def main(argv=None):
             initialize(args.output,args.paper_current,args.record_current,args.paper_prefix,args.record_prefix,args.width)
             print(str(args.output.resolve()));return 0
         if args.command=='run':return run(args)
+        if args.command=='prepare-upload':
+            from .delivery import prepare_delivery
+            report=prepare_delivery(args.output,sorted((args.output/'json').glob('*.json')),args.workbook)
+            print(json.dumps(report,ensure_ascii=False,indent=2));return 0 if report['status']=='ready' else 1
+        if args.command=='decode-cloud':
+            import gzip
+            from .delivery import decode
+            if args.output.exists():raise FileExistsError(args.output)
+            raw=args.archive.read_bytes()
+            if args.archive.suffix=='.gz':raw=gzip.decompress(raw)
+            dump(args.output,decode(json.loads(raw)));return 0
         if args.command=='init':
             root=args.directory.resolve();dest=root/'examples'
             if dest.exists():raise FileExistsError(dest)

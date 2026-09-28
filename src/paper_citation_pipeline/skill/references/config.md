@@ -16,7 +16,7 @@
 
 实体支持 citations、papers、reports，映射左侧是模板原表头，右侧是程序字段。notes包含来源JSON、局部来源ID、歧义和图表上下文；模板有专栏时可额外映射 visual_context。只改mapping，不能臆造未知模板字段。详细字段清单随工具项目的 docs/fields.md 提供，程序也会在未知字段时明确报错。
 
-运行JSON支持 input 或 parser_output（二选一）、output、target、aliases、kind、template、mapping、excel、catalog_json、grobid_url、ocr、resume、expect_target、必需的 id_state，以及可选 api_config（内部三环节调用）。相对路径以配置文件目录为基准，CLI覆盖路径以当前目录为基准。
+运行JSON支持 input 或 parser_output（二选一）、output、target、aliases、kind、template、mapping、excel、catalog_json、grobid_url、ocr、resume、expect_target、必需的 id_state，以及可选 api_config（书目、原文上下文和覆盖证据核验）。相对路径以配置文件目录为基准，CLI覆盖路径以当前目录为基准。
 
 无catalog_json时报告名称待核实；有本地清单时每条须含 title、url、date、excel_row。清单日期不必然等于出版年。名称匹配不会替代内容引用确认。
 
@@ -42,4 +42,4 @@ JSON增加 `numbering.paper_id` 与 `numbering.records`（原证据record_id→�
 
 转换进度另存于输出目录 `conversion-progress.json`；模板进度位于XLSX旁 `*.progress.json`。详细原因和每篇耗时见日志及manifest，不把100%解释成100%引用准确。
 
-填表后程序质检进度为XLSX旁 `*.quality-progress.json`。本地结构检查自动执行；api_config启用限额内部三环节调用，旧ai_config忽略。详情见SKILL.md。
+填表后程序质检进度为XLSX旁 `*.quality-progress.json`。本地结构检查自动执行；api_config启用限额证据语义核验；upload-readiness.json单列当前交付状态，旧ai_config忽略。详情见SKILL.md。

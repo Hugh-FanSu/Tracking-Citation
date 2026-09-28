@@ -1,11 +1,12 @@
 """Restore IEEE [a]–[b] ranges using PDF characters and an existing citation anchor."""
 import re
 import pymupdf
+from pdf_evidence import open_document
 
 
 def recover(pdf,data):
     additions=[]
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         for page_no,page in enumerate(doc,1):
             for block in page.get_text('rawdict')['blocks']:
                 chars=[]

@@ -53,6 +53,17 @@ def joint_authorship(b):
         if all(re.fullmatch(r'[A-Za-z][A-Za-z ,&-]+\s*\[[A-Za-z][A-Za-z-]+\]',p) for p in parts):
             matches=[m.group() for p in parts for m in target.finditer(p)]
             if matches:return dict(raw_author_label=bracketed[1],target_author=matches[0],coauthors=parts,basis='printed_institutional_joint_signature_with_bracketed_labels')
+    # Expanded institutional names may precede the title rather than the year.
+    # Require a bounded signed sentence and institutional coauthor names, not
+    # a title merely mentioning the target.
+    signed_names=re.match(r'^([A-Z][A-Za-z &,-]{8,240})\.\s+',raw)
+    if signed_names:
+        parts=re.split(r'\s+(?:and|&)\s+',signed_names[1])
+        matches=[p for p in parts if re.fullmatch(ORG,p,re.I)]
+        if len(parts)>1 and matches and all(re.fullmatch(ORG,p,re.I) or
+                (re.fullmatch(r'(?:[A-Z][A-Za-z-]*|of|the|for)(?:\s+(?:[A-Z][A-Za-z-]*|of|the|for))*',p) and
+                 re.search(r'\b(?:Institute|Institution|Programme|Program|Organization|Organisation|Agency|University|Council|Commission|Department|Bank|Foundation)\b',p)) for p in parts):
+            return dict(raw_author_label=signed_names[1],target_author=matches[0],coauthors=parts,basis='printed_expanded_institutional_signature_before_title')
     # Title/year may follow a compact, explicitly joined organization signature.
     acronym=r'[A-Z][A-Z0-9]{1,15}(?:[-/][A-Z][A-Z0-9]{1,15})*'
     signed=re.match(r'^\s*('+acronym+r'(?:\s*(?:&|and|;)\s*'+acronym+r')+)\s*[.:]',raw)
@@ -71,7 +82,7 @@ def joint_authorship(b):
     # Refuse title-first prose; require an author-list connector, or a compact
     # acronym compound actually printed in the reference's author position.
     if re.search(r'\b(?:report|assessment|study|analysis|about|towards|review|based|funded|supported)\b',prefix,re.I):return None
-    if re.search(r'\.\s+[A-Z][a-z]{2,}',prefix):return None
+    if re.search(r'\.\s+[A-Z](?:[a-z]+|\s)',prefix):return None
     if '/' in prefix and not re.search(r'https?:',prefix,re.I):
         slash_parts=[p.strip() for p in prefix.split('/')]
         matches=[p for p in slash_parts if re.fullmatch(ORG,p,re.I)]
@@ -138,6 +149,11 @@ def org_reference(b):
     place_publisher=re.search(r'\([A-Z][A-Za-z .-]{1,35}:\s*('+ORG+r')\s*\)',raw)
     if place_publisher and not evidence:
         evidence.append('target_in_place_publisher_field')
+    # Commissioning evidence is not authorship. Normalize only line-wrap hyphens;
+    # retain the original reference and let role review distinguish the two.
+    role_text=re.sub(r'(?<=\w)[-\u00ad]\s+(?=\w)','',raw)
+    commissioned=re.search(r'\b(?:prepared\s+for|commissioned\s+by|preparad[oa]\s+para(?:\s+o|\s+a)?)\s+('+ORG+r')(?!\w)',role_text,re.I)
+    if commissioned:evidence.append('target_in_commissioned_report_statement')
     joint=local_author_signature(b) or joint_authorship(b)
     if joint:evidence.append('target_in_joint_authorship')
     compound_scope=False
@@ -390,7 +406,8 @@ def unep_rows(index):
                 continue  # A link to the merged Goodchild entry is NOT proof of a UNEP citation.
             same_para = sorted([x for x in index['occurrences'] if x['paragraph_id'] == o['paragraph_id']], key=lambda x: x['offsets']['start'] or 0)
             sentences = [s for s in p.get('sentences', []) if o['offsets']['start'] is not None and s['start'] <= o['offsets']['start'] and s['end'] >= o['offsets']['end']]
-            sentence = min(sentences, key=lambda s: len(s['text']))['text'] if sentences else None
+            selected_sentence = min(sentences, key=lambda s: len(s['text'])) if sentences else None
+            sentence = selected_sentence['text'] if selected_sentence else None
             rows.append({'record_id': edge['edge_id'], 'paper_id': index['paper_id'], 'document_id': index['document_id'],
                          'report_id': None, 'report_candidate_id': ref['reference_id'], 'location_id': o['location_id'],
                          'paragraph_id': o['paragraph_id'], 'occurrence_in_paragraph': same_para.index(o)+1 if p else None,
@@ -400,7 +417,7 @@ def unep_rows(index):
                          'paragraph_text': p.get('text'), 'previous_paragraph': ps.get(p.get('previous_paragraph_id'), {}).get('text'),
                          'pdf_context':o.get('pdf_context'),'docling_table_ids':o.get('docling_table_ids',[]),
                          'next_paragraph': ps.get(p.get('next_paragraph_id'), {}).get('text'), 'carrier': o['carrier'],
-                         'citation_sentence': sentence, 'sentence_status': 'grobid_tei_s' if sentence else 'not_extracted_use_full_context',
+                         'citation_sentence': sentence, 'sentence_status': selected_sentence.get('source','grobid_tei_s') if sentence else 'not_extracted_use_full_context',
                          'coordinates': o['coordinates'], 'context_coordinates': p.get('coordinates', []),
                          'pdf_pages': sorted({c['page'] for c in (o['coordinates'] or p.get('coordinates',[]))}),
                          'page_evidence_scope':'marker' if o['coordinates'] else 'paragraph', 'printed_page': None,

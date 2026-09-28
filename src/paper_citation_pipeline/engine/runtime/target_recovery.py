@@ -2,6 +2,8 @@
 import re
 import unicodedata
 import pymupdf
+from pdf_evidence import open_document
+from paper_citation_pipeline.evidence_geometry import rectangle
 from standardize_citations import uid,org_reference,ORG,ALIASES
 
 
@@ -34,7 +36,7 @@ def recover_joint_authors(index):
         peers=[b for b in refs if (b.get('organization_candidate') or {}).get('year_label_from_raw')==year and signature((b.get('organization_candidate') or {}).get('joint_authorship') or {})==signature(joint)]
         if len(peers)!=1:continue
         label=r'\s*(?:&|and|,|/|-)\s*'.join(alias_pattern(x.strip(' .')) for x in parts)
-        pattern=re.compile(r'(?<!\w)'+label+r'\s*[,.(]\s*'+re.escape(year)+r'(?![\da-z])',re.I)
+        pattern=re.compile(r'(?<!\w)'+label+r'(?:\s*[,.(]\s*|\s+)'+re.escape(year)+r'(?![\da-z])',re.I)
         for p in index['contexts']:
             if p['kind']=='head':continue
             for m in pattern.finditer(p['text']):
@@ -78,7 +80,7 @@ def number_map(doc,index):
     for r in index['references']:
         cs=r.get('coordinates',[])
         if not cs:continue
-        c=cs[0];page=doc[c['page']-1];box=pymupdf.Rect(c['x'],c['y'],c['x']+c['width'],c['y']+c['height'])
+        c=cs[0];page=doc[c['page']-1];box=pymupdf.Rect(rectangle(c))
         for block in page.get_text('dict')['blocks']:
             for line in block.get('lines',[]):
                 rect=pymupdf.Rect(line['bbox'])
@@ -101,7 +103,7 @@ def number_map(doc,index):
 
 def recover_numeric(pdf,data,index):
     changes=[];findings=[]
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         mapping,labels=number_map(doc,index)
         for o in index['occurrences']:
             if o.get('style')!='numeric':continue
@@ -185,7 +187,7 @@ def recover_table_codes(pdf,data,index):
     short=[re.escape(a['name']) for a in ALIASES['aliases'] if 2<=len(a['name'])<=12 and '/' not in a['name']]
     pattern=re.compile(r'(?<!\w)('+'|'.join(short)+r')\s*/\s*[A-Za-z][A-Za-z0-9.-]*(?:\s*/\s*[A-Za-z0-9][A-Za-z0-9.-]*){1,8}',re.I)
     document=data.get('docling',{}).get('document',{})
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         for table in document.get('tables',[]):
             for cell in table.get('data',{}).get('table_cells',[]):
                 for hit in pattern.finditer(cell.get('text','')):
@@ -237,7 +239,7 @@ def recover_fragmented_table_sources(pdf,index):
     """
     from urllib.parse import urlsplit
     changes=[];pending=[]
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         for page_no,page in enumerate(doc,1):
             lines=[(''.join(s['text'] for s in l['spans']).strip(),pymupdf.Rect(l['bbox'])) for b in page.get_text('dict')['blocks'] for l in b.get('lines',[])]
             for title,header in lines:

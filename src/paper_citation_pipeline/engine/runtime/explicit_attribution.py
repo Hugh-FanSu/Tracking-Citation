@@ -2,6 +2,7 @@
 import re
 from urllib.parse import urlsplit
 import pymupdf
+from pdf_evidence import open_document
 from standardize_citations import ORG,ALIASES,uid
 from target_recovery import compact,coord,add_edge
 
@@ -12,7 +13,7 @@ USE=re.compile(r'\b(?:we\s+(?:\w+\s+){0,4}(?:used|use|performed|compiled|annotat
 
 def recover(pdf,index):
     changes=[]
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         for page_no,page in enumerate(doc,1):
             for block in page.get_text('blocks'):
                 if block[6]!=0:continue

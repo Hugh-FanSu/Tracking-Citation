@@ -19,6 +19,16 @@ def url_key(url):
     return re.sub(r'^https?://(?:www\.)?', '', re.sub(r'\s+', '', url or '').lower()).rstrip('/.,);')
 
 
+class CatalogIndex:
+    """Compile invariant catalogue text/URL work once per batch."""
+    def __init__(self,rows):
+        self.entries=[]
+        for item in rows:
+            key=url_key(item['url']);tokens=words(item['title'])
+            self.entries.append((item,key,tokens,Counter(tokens),' '.join(tokens),
+                                 re.compile(re.escape(key)+r'(?=$|[.,;)])') if key else None))
+
+
 def match_reference(row, catalog):
     review = row['pdf_review']
     raw = review['reference_text_after_review']
@@ -29,16 +39,16 @@ def match_reference(row, catalog):
     tokens = words(title)
     compact_reference = re.sub(r'\s+', '', raw).lower()
     exact_urls, exact_titles, title_hits = [], [], []
-    for item in catalog:
-        key = url_key(item['url'])
-        if key and re.search(re.escape(key) + r'(?=$|[.,;)])', compact_reference):
+    index=catalog if isinstance(catalog,CatalogIndex) else CatalogIndex(catalog)
+    token_counts=Counter(tokens);joined_tokens=' '.join(tokens)
+    for item,key,target,target_counts,joined_target,url_pattern in index.entries:
+        if key and url_pattern.search(compact_reference):
             exact_urls.append(item)
             continue
-        target = words(item['title'])
-        exact = target and Counter(tokens) == Counter(target)
+        exact = target and token_counts == target_counts
         # Longer cited titles may contain a subtitle or publisher. Require exact contiguous
         # catalogue title words, including any edition year; never use fuzzy score alone.
-        subset = len(target) >= 5 and (' '.join(target) in ' '.join(tokens))
+        subset = len(target) >= 5 and (joined_target in joined_tokens)
         if exact:
             exact_titles.append(item)
         elif subset:

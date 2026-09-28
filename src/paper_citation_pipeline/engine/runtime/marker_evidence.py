@@ -2,6 +2,7 @@
 import unicodedata
 import re
 import pymupdf
+from pdf_evidence import open_document
 from target_recovery import coord
 
 
@@ -12,7 +13,7 @@ def normalized(text):
 def locate(pdf,index):
     changes=[];contexts={c['id']:c for c in index['contexts']}
     targets={r['reference_id'] for r in index['references'] if r.get('organization_candidate')}
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         cache={}
         for o in index['occurrences']:
             if o.get('coordinates') or not o.get('raw_marker') or not any(e['reference_id'] in targets for e in o['links']):continue
@@ -50,7 +51,7 @@ def repair_nested_author_marker(pdf,index):
     """Correct duplicated TEI author labels only against one native PDF marker."""
     changes=[]
     targets={r['reference_id'] for r in index['references'] if r.get('organization_candidate')}
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         for o in index['occurrences']:
             raw=o['raw_marker'];m=re.search(r'\(([A-Za-z]{2,})\s+(?:19|20)\d{2}\(\1\b',raw)
             cs=o.get('coordinates',[])

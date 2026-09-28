@@ -1,6 +1,6 @@
 # Tracking Citation
 
-版本：**0.8.4**。支持Mac/Windows共用源码；[安装与双平台发布流程](docs/platform-releases.md)。Windows完整解析尚待实机验证。
+版本：**0.9.0.dev3（本地核验开发版）**。支持Mac/Windows共用源码；[安装与双平台发布流程](docs/platform-releases.md)。Windows完整解析尚待实机验证。
 
 源码安装：`python -m pip install ".[full]"`，启动图形界面：`paper-citations-gui`。
 
@@ -41,11 +41,9 @@
 
 当GROBID把参考文献误归为正文而Docling已正确提取时，程序从Docling的References区恢复目标条目，用原PDF对应区域的文字和坐标核验，记录修复来源。原TEI与原解析JSON保持原样；修复写入最终JSON的引用索引。文末条目不计为正文引用，跨页重复页眉不打断参考文献区。
 
-依照新的流程要求，智谱调用嵌入解析、填表、异常三个环节，界面没有可随意开启的AI质检开关。首页填入Key后，新任务自动加载接口配置；没有Key时本地解析仍可运行，不能称为API验证成功。CLI由api_config明确启用；历史ai_config不恢复旧版语义审查。
+0.9改为本地证据语义核验：模型读取全部书目、参考文献区域文字、引用附近原文行及机构提及。程序反向索引与填表，普通字段映射检查不再花费模型token。Key仅驻留进程；没有Key会保存本地候选结果，但交付检查不会通过。
 
-每10篇一组，每环节最多一次HTTP请求；每次输入至多24000字符，输出至多1536 tokens，无自动重试。每组最多3次请求。仅发送结构统计、字段映射与程序异常，不审全文、不改引用图、不替代确定性的Excel写入。API状态、回答、接口返回的usage保存在api-stages.json，失败进入exceptions日志，不默认为通过。同任务同输入复用结果，失败或输入改变不自动再次花费；需要重新验证时创建新任务。
-
-管理员仍可显式使用check-api进行一次最小连接诊断。Key只驻留进程，通过环境变量传给后台，不写入配置或日志。
+详见[0.9本地核验与交付说明](docs/local-verification.md)。工作台增加“交付包状态”。只在所有纳入论文及Excel检查通过后生成包含压缩JSON、总表、清单的ZIP；不上传文件，也不删除PDF。该开发版尚未通过真实模型盲测，不能当成95%准确率保证或全面删除原件的依据。
 
 以下为安装和高级命令行使用说明。
 
@@ -283,6 +281,8 @@ python -m unittest discover -s tests -v
 
 0.7.6内部校验：内置UNEP/EEAP及U.N. Environment变体；用户旧本地变体文件不会被默默覆盖。独立PDF作者年份标记对账，即使已有引用也检查重复次数缺口；未知“已知简称/附属署名”进入日志，不自动承认新身份。此项不覆盖所有数字引用或无标记转述。
 上下文在保留原始索引和偏移的前提下，以PDF缩进、连续行距及共享Docling文本块重建；context_audit保留原值与证据。无证据时不重分段；该校验不等于语义或全篇段落边界认证。
+以下0.7–0.8修复记录为历史行为，模型运行方式以0.9说明为准。
+
 AI填表环节在Excel保存和本地回读后执行，输入包含实际文件哈希、逐格比对总数、错误单元格签名及位置，而不是仅有预计行数。api-input-*.json留存模型真实输入，未向模型发送全文。请求仍为每10篇每环节一次，失败不自动重试。自动校验与模型通道成功不得表述为全篇无漏引。
 
 模型返回须通过确定性证据约束：仅采纳输入证据中已存在的论文和异常代码；原始返回与未采纳项分别保留在raw_result、unsupported_findings。参考文献条目数不要求等于正文引用次数。模型仅解释结构检查结果，不独立认证召回率；本地异常不因模型漏报而被清除。
@@ -322,3 +322,38 @@ API结构摘要同时携带参考文献分区未核验项及不可用状态，�
 - 拆分书目时按子条目证据分配 DOI、作者及出版信息，避免相邻条目污染；重复作者标签须以原 PDF 核验后修复。
 
 上述规则受证据边界约束，不保证跨页脚注、ibid/同上、多重转引、扫描图像或隐含转述全部召回。Windows 实机验证仍待完成。
+
+
+### 0.8.5 — 2026-09-28
+
+- Recover plain-number legal footnotes, explicit `above n` references, and conservative same-page `At`/`ibid` references; preserve ambiguous or mixed-source pointers.
+- Preserve PDF-backed body context and sentence provenance, including supported cross-page continuations without author acknowledgments.
+- Recognize expanded institutional coauthor signatures before titles; reconcile fused printed bibliography labels and correct independently verified author-only titles.
+- Recover publication years from repeated journal issue headers. Keep no-target warnings for papers citing other institutions.
+- Random three-paper audit: 5 legal-footnote citations, 2 superscript citations, and one UNDP-only negative sample. This is a small development sample, not a general recall guarantee.
+
+
+### 0.8.6 — shared evidence and catalogue processing
+
+- Reuse PDF handles and bounded full-page extraction within one paper; preserve native clipped-region verification and copy isolation.
+- Compile catalogue URL/title representations once per batch and reuse identical within-paper matches.
+- Preserve evidence, citation decisions, ambiguity and per-paper Excel checkpoints. In a two-round, three-paper local comparison, postprocessing took 10.92s vs 5.19s (52.5% less); GROBID/Docling and Excel were excluded. This is not an end-to-end speed or recall claim.
+
+
+### 0.8.7 — saved snapshot reuse and additional evidence boundaries
+
+- Avoid redundant final Excel export when all input/artifact fingerprints and the completed checkpoint agree; preserve final readback and stage checks.
+- Keep commissioned-report statements (English/Portuguese, including PDF line-wrap hyphens) as retrieval evidence, separately from authorship. Flag target names in third-party source titles and associated markers for possible indirect use.
+- Restore verified paragraph openings spanning two columns and a page boundary; retain the immutable citation offsets and record context/section corrections.
+- This is not an incremental row writer: cumulative per-paper workbook generation still scales with completed batch size. Ambiguous authorship and indirect semantic attribution remain review items.
+
+
+### 0.8.8 — English-only input policy
+
+- Detect body language locally before PDF engines and API calls, including cached-parser runs; exclude non-English papers without assigning new IDs or exporting citation rows.
+- Keep language evidence and exclusion reasons. Hold insufficient/mixed-language text for review instead of assuming English; translated abstracts do not override body language.
+- Show excluded counts in GUI progress, preserve historical numbering, and support all-excluded batches with an empty template export.
+
+### 0.9.0.dev3 — 原文参考文献区域覆盖
+
+从原PDF标题独立选择参考文献起始页至文末，兼容标题前杂字符；相邻请求保留重叠原文行，并保存逐行核验覆盖记录。未定位标题、未核验行、超预算或模型不确定都保持待处理。书目模型仍在GROBID/Docling完成后运行，尚未实现独立并行提取及异常自动修复闭环。开发版不是95%准确率保证。

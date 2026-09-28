@@ -1,6 +1,7 @@
 """Local resource-name evidence and a separate policy-borrowing review queue."""
 import re
 import pymupdf
+from pdf_evidence import open_document
 from standardize_citations import uid,ORG
 from target_recovery import compact,coord,add_edge
 
@@ -21,7 +22,7 @@ def recover_local_sources(pdf,index):
     for r in refs:
         for name in resource_names(r):
             key=re.sub(r'\b(?:on|of)\b','on',name.lower());resources.setdefault(key,[]).append(r)
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         for page_no,page in enumerate(doc,1):
             for block in page.get_text('blocks'):
                 if block[6]!=0:continue

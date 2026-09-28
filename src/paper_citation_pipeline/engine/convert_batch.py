@@ -1,5 +1,6 @@
 """Original PDF -> GROBID/Docling -> per-paper evidence packet and reading MD."""
 import argparse
+from copy import deepcopy
 import os
 import hashlib
 import json
@@ -14,13 +15,15 @@ import time
 HERE=Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE/'runtime'))
 sys.path.insert(0,str(HERE.parents[1]))
+from paper_citation_pipeline import __version__
 from paper_citation_pipeline.progress import Progress
 from paper_citation_pipeline.numbering import assign, check
 from standardize_citations import normalize, unep_rows, ORG, uid, ALIASES, ALIAS_PATH
-from match_report_catalog import match_reference
+from match_report_catalog import match_reference, CatalogIndex
 from validate_packet import validate
 from reference_repairs import repair
 from source_checks import source_conflicts
+from pdf_evidence import shared_pdf_evidence, open_document, evidence_stats
 
 
 def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -32,7 +35,8 @@ def save(path,data):
     tmp.replace(path)
 
 
-def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state=None):
+@shared_pdf_evidence
+def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state=None, language=None):
     import pymupdf
     from lxml import etree
     data=json.loads(path.read_text())
@@ -59,8 +63,17 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
     from metadata_repair import repair_metadata
     metadata,metadata_changes=repair_metadata(pdf,data)
     corrections.extend(metadata_changes)
-    from paper_citation_pipeline.author_review import review_authors
-    author_findings=review_authors(idx,os.environ.get("PAPER_CITATION_AUTHOR_API_CONFIG"),output)
+    if 'tei' in artifacts:
+        ns={'t':'http://www.tei-c.org/ns/1.0'}
+        header=tree.find('.//t:teiHeader',ns)
+        if header is not None:
+            for key,xpath in [('doi','.//t:sourceDesc//t:idno[@type="DOI"]'),('journal','.//t:sourceDesc//t:monogr/t:title')]:
+                element=header.find(xpath,ns)
+                if element is not None:metadata.setdefault(key,''.join(element.itertext()).strip())
+    from paper_citation_pipeline.local_review import Reviewer, review_references, finalize
+    reviewer=Reviewer(os.environ.get("PAPER_CITATION_AUTHOR_API_CONFIG"),output)
+    reference_review=review_references(idx,ALIASES,reviewer)
+    author_findings=[]
     from target_recovery import recover as recover_citations
     citation_changes,citation_findings=recover_citations(pdf,working,idx)
     from footnote_sources import recover as recover_footnotes
@@ -74,15 +87,16 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
     citation_findings.extend(author_findings)
     corrections.extend(citation_changes)
     pages=[]
-    with pymupdf.open(pdf) as doc:
+    with open_document(pdf) as doc:
         for n,page in enumerate(doc,1):
             lines=[]
-            for block in page.get_text('dict')['blocks']:
+            for block_no,block in enumerate(page.get_text('dict')['blocks']):
                 for line in block.get('lines',[]):
-                    lines.append({'text':''.join(s['text'] for s in line['spans']), 'bbox':list(line['bbox'])})
+                    lines.append({'text':''.join(s['text'] for s in line['spans']), 'bbox':list(line['bbox']), 'block_id':block_no, 'direction':list(line.get('dir',(1,0)))})
             pages.append({'page':n,'width':page.rect.width,'height':page.rect.height,
                           'text':page.get_text(), 'lines':lines,'origin':'top-left','unit':'PDF point',
                           'source':'original_pdf_text_layer'})
+    from semantic_recovery import recover as recover_reviewed
     attributions=[]
     pattern=re.compile(r'(?<!\w)('+ORG+r')(?!\w)',re.I)
     for p in idx['contexts']:
@@ -99,10 +113,15 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
     from marker_evidence import locate,repair_nested_author_marker
     corrections.extend(repair_nested_author_marker(pdf,idx))
     corrections.extend(locate(pdf,idx))
+    corrections.extend(recover_reviewed(pdf,idx,pages))
     candidates=unep_rows(idx)
     from context_repair import repair_contexts
     context_changes=repair_contexts(pdf,idx,candidates,data.get('docling',{}).get('document',{}))
     corrections.extend(context_changes)
+    catalog_index=None; report_matches={}
+    if catalog is not None and candidates:
+        if '_index' not in catalog:catalog['_index']=CatalogIndex(catalog['rows'])
+        catalog_index=catalog['_index']
     for row in candidates:
         row['inclusion_status']='pending_annotation'
         row['resource_type_excludes_collection']=False
@@ -120,7 +139,9 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
         else:
             temporary={**row,'pdf_review':{'reference_text_after_review':row['raw_reference'],
                        'reference_correction_status':'original_entry_retained'}}
-            match=match_reference(temporary,catalog['rows'])
+            match_key=(row.get('parsed_title_unverified'),row['raw_reference'],row.get('year_label_from_raw'))
+            if match_key not in report_matches:report_matches[match_key]=match_reference(temporary,catalog_index)
+            match=deepcopy(report_matches[match_key])
             match['status']={'已匹配':'matched','未匹配':'unmatched','待核实':'ambiguous'}[match['status']]
             if match.get('catalog_resource_id'):
                 match['catalog_resource_id']=ALIASES['organization_id']+'-resource-'+match['catalog_resource_id'].split('-resource-',1)[-1]
@@ -159,17 +180,21 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
                                'status':'linked_candidates_found' if candidates else 'no_linked_candidates'},
             'quality':{'readiness':'pending_validation','issues':issues,'recall_certified':False,
                        'paragraph_boundaries_certified':False},
-            'provenance':{'skill_version':'1.1.1','tool_version':'0.8.4','artifacts':artifacts,
+            'provenance':{'pdf_evidence_session':evidence_stats(),'skill_version':'1.1.1','tool_version':__version__,'artifacts':artifacts,
                           'parser_output_sha256':digest(path),
                           'script_hashes':{str(p.relative_to(HERE)):digest(p) for p in HERE.rglob('*.py')},
                           'alias_config_sha256':digest(ALIAS_PATH),
                           'catalog':None if catalog is None else {k:catalog.get(k) for k in ('source','sheet','snapshot_sha256')}}}
+    if language is not None:result['language']=language
     errors=validate(result)
     if data.get('status')!='success':errors.append('Parser stages not fully successful')
     if not {'tei','docling','md'}<=artifacts.keys():errors.append('Required raw/reading artifacts missing')
     result['quality']['validation_errors']=errors
     result['quality']['readiness']='failed' if errors else ('ready_with_issues' if issues else 'ready_for_annotation')
+    finalize(result,reviewer,reference_review)
     if not errors and id_state is not None:assign(result,id_state)
+    from paper_citation_pipeline.delivery import seal
+    seal(result)
     save(output/'json'/path.name,result)
     return {'paper':path.stem,'source_pdf':str(pdf),'source_sha256':data['source']['sha256'],
             'page_count':len(pages),'readiness':result['quality']['readiness'],
@@ -192,7 +217,7 @@ def main():
     args=ap.parse_args()
     check(args.id_state)
     out=args.output.resolve()
-    for f in ['tei','docling','md','json','logs']:(out/f).mkdir(parents=True,exist_ok=True)
+    for f in ['tei','docling','md','json','logs','excluded']:(out/f).mkdir(parents=True,exist_ok=True)
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s',handlers=[logging.StreamHandler(),logging.FileHandler(out/'logs/packet.log')])
     parser_dir=args.parser_output.resolve() if args.parser_output else out/'_parser'
     if parser_dir==out:ap.error('--output must differ from existing --parser-output to preserve raw JSON')
@@ -227,12 +252,26 @@ def main():
     for path in paths:
         start=time.perf_counter()
         try:
-            if args.parser_output is None:
-                engine_report=process_pdf(pdfs[len(reports)].resolve(),engine_args)
-                engine_reports.append(engine_report)
-                save(out/'engine-summary.json',engine_reports)
-                if engine_report['status']!='success':raise ValueError('PDF engines failed; see logs')
-            report=packet(path,parser_dir,out,catalog,args.expect_target,args.id_state)
+            from paper_citation_pipeline.language import inspect_pdf
+            source_pdf=pdfs[len(reports)].resolve() if args.parser_output is None else Path(json.loads(path.read_text())['source']['pdf'])
+            language=inspect_pdf(source_pdf)
+            if language['status']!='english':
+                report=dict(paper=path.stem,readiness='excluded',source_pdf=str(source_pdf),
+                            exclusion_reason=language['reason'],language=language,validation_errors=[])
+                save(out/'excluded'/path.name,report)
+                for folder,suffix in [('json','.json'),('tei','.tei.xml'),('md','.md'),('docling','.docling.json')]:
+                    old=out/folder/(path.stem+suffix)
+                    if old.exists():
+                        archive=out/'excluded'/'prior-artifacts'/folder;archive.mkdir(parents=True,exist_ok=True)
+                        shutil.copy2(old,archive/old.name);old.unlink()
+            else:
+                if args.parser_output is None:
+                    engine_report=process_pdf(source_pdf,engine_args)
+                    engine_reports.append(engine_report)
+                    save(out/'engine-summary.json',engine_reports)
+                    if engine_report['status']!='success':raise ValueError('PDF engines failed; see logs')
+                report=packet(path,parser_dir,out,catalog,args.expect_target,args.id_state,language)
+                report['language']=language
         except Exception as exc:
             logging.exception('Failed to package %s',path.name)
             report={'paper':path.stem,'readiness':'failed','validation_errors':[str(exc)]}
@@ -242,9 +281,9 @@ def main():
         reports.append(report)
         logging.info('%s: %s',path.stem,report['readiness'])
         save(out/'manifest.json',reports)
-        progress.advance(path.stem,report['readiness']=='failed')
+        progress.advance(path.stem,report['readiness']=='failed',skipped=report['readiness']=='excluded')
         if exporter:
-            try:exporter.advance(out/'json'/path.name,report['readiness']=='failed')
+            try:exporter.advance(out/'json'/path.name,report['readiness']=='failed',skipped=report['readiness']=='excluded')
             except Exception:
                 logging.exception('Excel checkpoint failed; parsing outputs retained')
     progress.finish()
