@@ -77,6 +77,8 @@ def _run(options):
     if values.get('api_config'):
         from .ai_review import config as load_api_config
         load_api_config(values['api_config'])
+        if not os.environ.get('PAPER_CITATIONS_API_KEY'):
+            raise ValueError('已启用模型证据审核，但缺少PAPER_CITATIONS_API_KEY；停止任务，不降级为无模型解析')
     if template:
         stream_config=out/'stream-export.json'
         dump(stream_config,dict(template=str(template),mapping=str(mapping),output=str(xlsx),id_state=str(values['id_state']),overwrite=bool(options.overwrite_excel)))

@@ -9,9 +9,10 @@ import xml.etree.ElementTree as ET
 from .config import read_json, digest
 from .numbering import assign, check
 from .progress import Progress
+from .review_status import export_status, model_evidence_current
 
 FIELDS={
- 'citations':set('record_id paper_id report_id location_id part section_title subsection_title pdf_pages printed_page paragraph_id occurrence_in_paragraph raw_marker target_marker citation_sentence paragraph_text previous_paragraph next_paragraph carrier raw_reference other_references confirmation_status context_status notes collector reviewer processed_date rule_version software report_match_status report_title source_json source_pdf target_name link_status visual_context'.split()),
+ 'citations':set('record_id paper_id report_id location_id part section_title subsection_title pdf_pages printed_page paragraph_id occurrence_in_paragraph raw_marker target_marker citation_sentence paragraph_text previous_paragraph next_paragraph carrier raw_reference other_references confirmation_status context_status notes collector reviewer processed_date rule_version software report_match_status report_title source_json source_pdf target_name link_status visual_context collection_tier collection_tier_label authorship_structure author_signature compound_author_flag collection_policy_version'.split()),
  'papers':set('paper_id title doi eid year authors journal abstract purpose conclusion source_pdf source_sha256 file_version page_count fulltext_status batch notes source_json target_name'.split()),
  'reports':set('report_id target_name title year edition identifiers url source_pdf language verification_status notes'.split())}
 
@@ -70,6 +71,7 @@ def collect(paths, id_state=None):
     def txt(e):return ''.join(e.itertext()).strip() if e is not None else None
     for path in paths:
         d=read_json(path)
+        current_review=model_evidence_current(d) if d.get('local_verification') else False
         if d.get('quality',{}).get('readiness')=='failed' or 'citation_index' not in d:raise ValueError(f'Not a usable packet: {path}')
         if id_state is not None:assign(d,id_state)
         pid=d.get('numbering',{}).get('paper_id',d['paper_id'])
@@ -110,11 +112,14 @@ def collect(paths, id_state=None):
                 chain=[r['section_title']]
             coords=r.get('coordinates') or r.get('context_coordinates') or []
             pages=sorted({c['page'] for c in coords})
+            from .collection_policy import classify as collection_classify
+            row.update(collection_classify(d,r))
             match=r.get('report_match',{'status':'not_searched'})
             disputed=match['status']=='matched' and any('年份' in x and '不同' in x for x in match.get('notes',[]))
             rid=match.get('catalog_resource_id') if match['status']=='matched' and not disputed else None
             title=(match.get('matched_title') or 0) if match['status']=='matched' and not disputed else 0
-            notes=['机器候选；未作有效内容引用确认。','link_status='+str(r.get('link_status')),'JSON='+str(path),'reference_id='+str(r.get('report_candidate_id'))]
+            status=export_status(d,r,model_current=current_review)
+            notes=[row['collection_tier_label'], '原始作者署名='+row['author_signature'], status['review_note'],'link_status='+str(r.get('link_status')),'JSON='+str(path),'reference_id='+str(r.get('report_candidate_id'))]
             if r.get('citation_form')=='explicit_source_use_without_marker':
                 notes.append('明确使用目标数据/网站；原文无正式引用标记。来源说明为原段落证据，不是文末书目；报告未匹配填0。')
             if r.get('author_review'):
@@ -139,8 +144,8 @@ def collect(paths, id_state=None):
                 row['paragraph_text']=r['pdf_context'];notes.append('段落未对齐；此上下文来自PDF标记邻近文本，非已确认完整段落。')
             row.update(report_id=rid,part=classify(' '.join(chain)),section_title=chain[0] if chain else r.get('section_title'),subsection_title=' / '.join(chain[1:]) or None,
                        pdf_pages=pages[0] if len(pages)==1 else ','.join(map(str,pages)) or None,
-                       confirmation_status='待核实',context_status='需人工复查',notes='\n'.join(notes),collector='paper-citations（自动导入）',reviewer=None,
-                       processed_date=datetime.now().date(),rule_version='paper-citations 0.7.9',software=json.dumps(d['parser_result'].get('software',{}),ensure_ascii=False),
+                       confirmation_status=status['confirmation_status'],context_status=status['context_status'],notes='\n'.join(notes),collector='paper-citations（自动导入）',reviewer=status['reviewer'],
+                       processed_date=datetime.now().date(),rule_version='paper-citations '+str(d.get('provenance',{}).get('tool_version') or 'unknown'),software=json.dumps(d['parser_result'].get('software',{}),ensure_ascii=False),
                        carrier={'p':'正文','cell':'表或表注','table':'表或表注','figDesc':'图或图注','note':'脚注或尾注','abstract':'正文'}.get(r.get('carrier'),'正文'),
                        report_match_status='待核实' if disputed else {'matched':'已匹配','unmatched':'未匹配'}.get(match['status'],'待核实'),report_title=title,
                        other_references='; '.join(dict.fromkeys(e.get('target_marker') or e['local_reference_id'] for e in occ[r['location_id']]['links'] if e['reference_id']!=r['report_candidate_id'])),

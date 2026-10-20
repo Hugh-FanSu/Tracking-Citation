@@ -1,7 +1,7 @@
 """Reverse lookup of reviewed references in independent native PDF blocks."""
 import re
 from collections import defaultdict
-from standardize_citations import uid, alias_pattern, structural_cross_reference
+from standardize_citations import uid, alias_pattern, structural_cross_reference, ORG
 from target_recovery import add_edge, number_map, coord
 from pdf_evidence import open_document
 
@@ -29,6 +29,8 @@ def recover(pdf, index, pages):
         if sum((x.get('verified_author_signature',{}).get('text') == signature_text if signature_text else x['semantic_review'].get('author_names') == d['author_names']) and
                x['semantic_review'].get('year') == d['year'] for x in refs) != 1:
             continue
+        if sum(x['semantic_review'].get('year') == d['year'] for x in refs) == 1:
+            signature = '(?:' + signature + '|' + ORG + ')'
         signatures.append((re.compile(r'(?<!\w)' + signature + r'(?:\s*[,.(]\s*|\s+)' + re.escape(d['year']) + r'(?![\da-z])', re.I), r))
     changes = []
     for page in pages:

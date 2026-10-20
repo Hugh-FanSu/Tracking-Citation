@@ -96,6 +96,14 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
             pages.append({'page':n,'width':page.rect.width,'height':page.rect.height,
                           'text':page.get_text(), 'lines':lines,'origin':'top-left','unit':'PDF point',
                           'source':'original_pdf_text_layer'})
+    from paper_citation_pipeline.reference_recovery import recover_missing
+    recovered, new_review = recover_missing(idx,pages,ALIASES,reviewer)
+    corrections.extend(recovered)
+    if new_review:
+        reference_review['decisions'].update(new_review['decisions'])
+        reference_review['expected']=len(idx['references'])
+        reference_review['reviewed']=len(reference_review['decisions'])
+        reference_review['status']='completed' if reference_review['expected']==reference_review['reviewed'] else 'pending'
     from semantic_recovery import recover as recover_reviewed
     attributions=[]
     pattern=re.compile(r'(?<!\w)('+ORG+r')(?!\w)',re.I)
@@ -229,7 +237,7 @@ def main():
         import atexit
         worker=Worker(args.ocr);atexit.register(worker.close)
         engine_args=SimpleNamespace(output=parser_dir,logs=out/'logs',grobid_url=args.grobid_url,
-                                    grobid_timeout=600,docling_timeout=1800,retries=2,ocr=args.ocr,
+                                    grobid_timeout=600,docling_timeout=1800,retries=int(os.environ.get("PAPER_GROBID_RETRIES", "2")),ocr=args.ocr,
                                     resume=args.resume,docling_worker=worker)
         for folder in ['tei','json','md','docling']:(parser_dir/folder).mkdir(parents=True,exist_ok=True)
     catalog=None
