@@ -81,3 +81,64 @@ class PipelineTests(unittest.TestCase):
         task={'id':'paper-task','attempts':1,'input_location':str(pdf),'input_sha256':digest(pdf)}
         with self.assertRaises(ValueError):
             prepare(task,{'roots':[str(root)],'config':{'id_state':str(state)}},root/'runs',numbering_read_only=True)
+
+    def test_timeout_stops_parser_and_keeps_review_running(self):
+        import time
+        a=self.job('a','parsing');b=self.job('b','reviewing')
+        for j,elapsed in ((a,601),(b,601)):
+            j.update(proc=Mock(),log=Mock(),monotonic=time.monotonic()-elapsed)
+            j['proc'].poll.return_value=None
+        with patch('paper_citation_pipeline.ledger.pipeline_worker.stop_process') as stop,patch.object(self.w,'save'):
+            self.w.poll()
+        stop.assert_called_once_with(a['proc'])
+        self.assertEqual(set(self.w.jobs),{'b'})
+        reason=self.client.post.call_args.args[1]['error']
+        self.assertIn('[stage_timeout]',reason)
+        self.assertIn('600秒',reason)
+        self.assertEqual(self.client.post.call_args.args[0],'fail')
+
+    def test_review_timeout_does_not_replay_model_or_stop_parser(self):
+        import time
+        a=self.job('a','reviewing');b=self.job('b','parsing')
+        for j,elapsed in ((a,901),(b,30)):
+            j.update(proc=Mock(),log=Mock(),monotonic=time.monotonic()-elapsed)
+            j['proc'].poll.return_value=None
+        with patch('paper_citation_pipeline.ledger.pipeline_worker.stop_process'),patch.object(self.w,'save'),patch.object(self.w,'launch') as launch:
+            self.w.poll()
+        self.assertEqual(set(self.w.jobs),{'b'});launch.assert_not_called()
+        self.assertIn('900秒',self.client.post.call_args.args[1]['error'])
+
+    def test_finished_stage_at_deadline_is_kept(self):
+        import time
+        a=self.job('a','parsing')
+        a.update(proc=Mock(),log=Mock(),monotonic=time.monotonic()-601,started_at=time.time()-601)
+        a['proc'].poll.return_value=0
+        self.w.poll()
+        self.assertEqual(a['stage'],'ready');self.client.post.assert_not_called()
+
+    def test_report_exposes_stage_time_and_limit(self):
+        import time
+        a=self.job('a','parsing');a['started_at']=time.time()-70
+        self.w.report()
+        row=self.client.post.call_args.args[1]['payload']['pipeline_jobs'][0]
+        self.assertGreaterEqual(row['elapsed_seconds'],70)
+        self.assertEqual(row['timeout_seconds'],600)
+
+    def test_timeouts_do_not_lock_queue(self):
+        from paper_citation_pipeline.ledger.resource_guard import ResourceGuard
+        guard=ResourceGuard(self.tmp.name)
+        for _ in range(5):guard.failure('[stage_timeout] slow paper')
+        self.assertFalse(guard.path.exists());self.assertEqual(guard.failures,0)
+
+    def test_watchdog_terminates_real_child_and_frees_lane(self):
+        import os,subprocess,sys,time
+        a=self.job('slow','parsing');work=Path(a['work']);work.mkdir()
+        proc=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=(os.name=='posix'))
+        from paper_citation_pipeline.ledger.worker import stop_process
+        self.addCleanup(stop_process,proc)
+        a.update(proc=proc,log=(work/'process.log').open('a'),monotonic=time.monotonic()-601)
+        self.w.poll()
+        self.assertIsNotNone(proc.poll())
+        self.assertFalse(self.w.jobs)
+        self.assertEqual(json.loads(self.w.state.read_text()),[])
+        self.assertIn('[stage_timeout]',self.client.post.call_args.args[1]['error'])

@@ -14,6 +14,9 @@ class PipelineWorker(Worker):
         super().__init__(*args,**kwargs)
         self.jobs={};self.state=self.root/'pipeline-state.json';self.drain=self.root/'pipeline-drain'
         self.timeline=self.root/'pipeline-events.jsonl'
+        self.stage_limits={'parsing':int(os.environ.get('PAPER_PARSE_TIMEOUT_SECONDS','600')),
+                           'reviewing':int(os.environ.get('PAPER_REVIEW_TIMEOUT_SECONDS','900'))}
+        if any(v <= 0 for v in self.stage_limits.values()):raise ValueError('阶段超时必须为正整数秒')
 
     def save(self):
         with self.lock:
@@ -26,7 +29,9 @@ class PipelineWorker(Worker):
 
     def report(self):
         with self.lock:
-            jobs=[{'task_id':j['task']['id'],'paper_id':j['task']['paper_id'],'stage':j['stage']} for j in self.jobs.values()]
+            jobs=[{'task_id':j['task']['id'],'paper_id':j['task']['paper_id'],'stage':j['stage'],
+                   'elapsed_seconds':max(0,int(time.time()-j.get('started_at',time.time()))),
+                   'timeout_seconds':self.stage_limits.get(j['stage'])} for j in self.jobs.values()]
         active=next((j for j in jobs if j['stage']=='reviewing'),jobs[0] if jobs else {})
         self.client.post('worker-report',{'worker':self.name,'payload':dict(phase='pipeline' if jobs else self.phase,current_task=active.get('task_id'),current_paper=active.get('paper_id'),completed=self.done,failed=self.failed,error=self.error,grobid_ready=self.grobid,pipeline_jobs=jobs,profiles=[{k:p[k] for k in ('name','organization','version','config_version')} for p in self.profiles],**metrics())})
 
@@ -92,7 +97,10 @@ class PipelineWorker(Worker):
             if not proc:continue
             code=proc.poll()
             if code is None:
-                if time.monotonic()-j['monotonic']>7200:self.fail(j,'阶段超过2小时上限')
+                limit=self.stage_limits[j['stage']]
+                if time.monotonic()-j['monotonic']>=limit:
+                    label='PDF解析' if j['stage']=='parsing' else 'GLM审查与导出'
+                    self.fail(j,f'[stage_timeout] {label}超过{limit}秒；已停止该篇并保留日志，继续其他论文；不自动重试模型')
                 continue
             j['log'].close();j.pop('log');j.pop('proc');j.pop('monotonic')
             if code:

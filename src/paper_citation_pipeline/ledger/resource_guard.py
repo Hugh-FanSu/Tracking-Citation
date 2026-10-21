@@ -100,7 +100,7 @@ class ResourceGuard:
 
 
     def failure(self, reason):
-        if reason.startswith(('[memory_pressure]', '[resource_oom]')):return
+        if reason.startswith(('[memory_pressure]', '[resource_oom]', '[stage_timeout]')):return
         self.failures += 1
         if self.failures >= 3:
             self.trip('连续3篇失败，停止自动运行；最后错误：' + reason)
