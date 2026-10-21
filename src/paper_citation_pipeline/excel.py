@@ -16,6 +16,12 @@ FIELDS={
  'papers':set('paper_id title doi eid year authors journal abstract purpose conclusion source_pdf source_sha256 file_version page_count fulltext_status batch notes source_json target_name'.split()),
  'reports':set('report_id target_name title year edition identifiers url source_pdf language verification_status notes'.split())}
 
+
+def excel_safe_text(value):
+    """Escape PDF control glyphs in XLSX only; JSON keeps exact source text."""
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+    return ILLEGAL_CHARACTERS_RE.sub(lambda hit: f'\\u{ord(hit.group()):04x}',value)
+
 def load_template(template,mapping):
     from openpyxl import load_workbook
     template=Path(template).resolve()
@@ -121,7 +127,7 @@ def collect(paths, id_state=None):
             status=export_status(d,r,model_current=current_review)
             notes=[row['collection_tier_label'], '原始作者署名='+row['author_signature'], status['review_note'],'link_status='+str(r.get('link_status')),'JSON='+str(path),'reference_id='+str(r.get('report_candidate_id'))]
             if r.get('citation_form')=='explicit_source_use_without_marker':
-                notes.append('明确使用目标数据/网站；原文无正式引用标记。来源说明为原段落证据，不是文末书目；报告未匹配填0。')
+                notes.append('明确使用目标数据/网站；原文无正式引用标记。来源说明为原段落证据，不是文末参考文献条目；报告未匹配填0。')
             if r.get('author_review'):
                 review=r['author_review']; result=review.get('result',{})
                 notes.append('作者角色API：'+result.get('role',review.get('status','pending'))+'；'+result.get('reason',review.get('reason',review.get('error',''))))
@@ -193,6 +199,7 @@ def _export_packets(paths,template,mapping,output,overwrite,id_state,progress):
                 if cell.value is not None:raise ValueError(f'Template data cell is not empty: {sheet.title}!{cell.coordinate}')
                 if i>style_row and not cell.has_style:cell._style=copy(sheet.cell(style_row,col)._style)
                 value=row.get(field)
+                if isinstance(value,str):value=excel_safe_text(value)
                 if isinstance(value,str) and len(value)>32767:raise ValueError(f'Excel text limit exceeded: {field}; JSON retained, no silent truncation')
                 cell.value=value
                 if isinstance(value,str):cell.data_type='s'

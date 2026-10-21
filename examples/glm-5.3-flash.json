@@ -1,0 +1,7 @@
+{
+  "endpoint": "https://open.bigmodel.cn/api/paas/v4",
+  "model": "glm-5.3-flash",
+  "timeout": 180,
+  "max_tokens": 4096,
+  "json_mode": true
+}

@@ -76,5 +76,5 @@ def export_status(packet, row, *, model_current=False):
     if (source_allowed and decision.get('boundary') == 'clean'
             and row.get('link_status') not in {'ambiguous', 'source_conflict', 'needs_reference_split'}):
         result.update(confirmation_status='已确认', reviewer='本地模型证据核验',
-                      review_note='当前书目署名与引用上下文已核验；整篇交付状态另行判断。')
+                      review_note='当前参考文献条目署名与引用上下文已核验；整篇交付状态另行判断。')
     return result

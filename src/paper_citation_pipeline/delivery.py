@@ -48,7 +48,7 @@ Image bytes are not embedded; this is explicitly a textual citation archive.
     keys = ('paper_id', 'document_id', 'page_count', 'target', 'metadata', 'numbering',
             'citation_index', 'pdf_pages', 'target_candidates', 'organization_attributions',
             'unresolved', 'corrections', 'target_pdf_mentions', 'reference_region_audit',
-            'recall_audit', 'target_coverage', 'quality', 'language', 'local_verification', 'metadata_review', 'mention_review')
+            'recall_audit', 'organization_reference_audit', 'target_coverage', 'quality', 'language', 'local_verification', 'metadata_review', 'mention_review')
     payload = {k: deepcopy(packet[k]) for k in keys if k in packet}
     payload['source'] = {'filename': Path(packet['source']['pdf']).name, 'sha256': packet['source']['sha256']}
     docling = packet.get('parser_result', {}).get('docling', {}).get('document', {})

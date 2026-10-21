@@ -20,6 +20,7 @@ def signature(value):
 
 def write_receipt(output,template,mapping,spec,data):
     """Expected values come from logical export data, never from the filled workbook."""
+    from .excel import excel_safe_text
     blank=load_workbook(template)
     sheets=[]
     for cfg in spec['sheets']:
@@ -28,7 +29,9 @@ def write_receipt(output,template,mapping,spec,data):
         for index,row in enumerate(data[cfg['entity']],start):
             cells=[]
             for col,field in cfg['_positions'].items():
-                cells.append({'column':col,'field':field,'signature':signature(row.get(field))})
+                value=row.get(field)
+                if isinstance(value,str):value=excel_safe_text(value)
+                cells.append({'column':col,'field':field,'signature':signature(value)})
             rows.append({'row':index,'paper_id':row.get('paper_id'),'cells':cells})
         sheets.append({'sheet':cfg['sheet'],'entity':cfg['entity'],'header_row':cfg.get('header_row',1),
                        'start_row':start,'rows':rows,'headers':{str(c.column):c.value for c in ws[cfg.get('header_row',1)] if c.value is not None},

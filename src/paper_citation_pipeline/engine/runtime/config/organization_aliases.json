@@ -1,5 +1,5 @@
 {
-  "version": "unep-aliases-1.5",
+  "version": "unep-aliases-1.6",
   "organization_id": "UNEP",
   "canonical_name": "United Nations Environment Programme",
   "aliases": [
@@ -12,12 +12,20 @@
       "kind": "spelling_variant"
     },
     {
+      "name": "United Nation Environment Programme",
+      "kind": "observed_spelling_variant"
+    },
+    {
       "name": "United Nations Environment",
       "kind": "short_name_candidate"
     },
     {
       "name": "UN Environment Programme",
       "kind": "short_name_candidate"
+    },
+    {
+      "name": "UN Envronment Programme",
+      "kind": "observed_spelling_variant"
     },
     {
       "name": "UN Environment Program",

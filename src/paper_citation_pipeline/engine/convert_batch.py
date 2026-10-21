@@ -70,6 +70,20 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
             for key,xpath in [('doi','.//t:sourceDesc//t:idno[@type="DOI"]'),('journal','.//t:sourceDesc//t:monogr/t:title')]:
                 element=header.find(xpath,ns)
                 if element is not None:metadata.setdefault(key,''.join(element.itertext()).strip())
+    pages=[]
+    with open_document(pdf) as doc:
+        for n,page in enumerate(doc,1):
+            lines=[]
+            for block_no,block in enumerate(page.get_text('dict')['blocks']):
+                for line in block.get('lines',[]):
+                    lines.append({'text':''.join(s['text'] for s in line['spans']), 'bbox':list(line['bbox']), 'block_id':block_no, 'direction':list(line.get('dir',(1,0)))})
+            pages.append({'page':n,'width':page.rect.width,'height':page.rect.height,
+                          'text':page.get_text(), 'lines':lines,'origin':'top-left','unit':'PDF point',
+                          'source':'original_pdf_text_layer'})
+    from paper_citation_pipeline.organization_reference_audit import scan as scan_names, reconcile as reconcile_names
+    name_inventory=scan_names(pages,idx['references'],ALIASES)
+    (output/'organization-name-scan').mkdir(parents=True,exist_ok=True)
+    save(output/'organization-name-scan'/path.name,name_inventory)
     from paper_citation_pipeline.local_review import Reviewer, review_references, finalize
     reviewer=Reviewer(os.environ.get("PAPER_CITATION_AUTHOR_API_CONFIG"),output)
     reference_review=review_references(idx,ALIASES,reviewer)
@@ -86,16 +100,6 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
     citation_changes.extend(local_changes);citation_findings.extend(local_findings)
     citation_findings.extend(author_findings)
     corrections.extend(citation_changes)
-    pages=[]
-    with open_document(pdf) as doc:
-        for n,page in enumerate(doc,1):
-            lines=[]
-            for block_no,block in enumerate(page.get_text('dict')['blocks']):
-                for line in block.get('lines',[]):
-                    lines.append({'text':''.join(s['text'] for s in line['spans']), 'bbox':list(line['bbox']), 'block_id':block_no, 'direction':list(line.get('dir',(1,0)))})
-            pages.append({'page':n,'width':page.rect.width,'height':page.rect.height,
-                          'text':page.get_text(), 'lines':lines,'origin':'top-left','unit':'PDF point',
-                          'source':'original_pdf_text_layer'})
     from paper_citation_pipeline.reference_recovery import recover_missing
     recovered, new_review = recover_missing(idx,pages,ALIASES,reviewer)
     corrections.extend(recovered)
@@ -104,6 +108,10 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
         reference_review['expected']=len(idx['references'])
         reference_review['reviewed']=len(reference_review['decisions'])
         reference_review['status']='completed' if reference_review['expected']==reference_review['reviewed'] else 'pending'
+    from paper_citation_pipeline.catalog_recovery import recover as recover_catalog
+    corrections.extend(recover_catalog(idx,catalog,ALIASES,reviewer))
+    from paper_citation_pipeline.catalog_recovery import recover_author_year_uses
+    corrections.extend(recover_author_year_uses(idx,pdf))
     from semantic_recovery import recover as recover_reviewed
     attributions=[]
     pattern=re.compile(r'(?<!\w)('+ORG+r')(?!\w)',re.I)
@@ -122,6 +130,10 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
     corrections.extend(repair_nested_author_marker(pdf,idx))
     corrections.extend(locate(pdf,idx))
     corrections.extend(recover_reviewed(pdf,idx,pages))
+    from paper_citation_pipeline.attribution_review import recover as recover_narrative
+    corrections.extend(recover_narrative(idx,pages,ALIASES,reviewer))
+    from paper_citation_pipeline.diagnostic_reconciliation import reconcile
+    reconcile(idx)
     candidates=unep_rows(idx)
     from context_repair import repair_contexts
     context_changes=repair_contexts(pdf,idx,candidates,data.get('docling',{}).get('document',{}))
@@ -158,7 +170,11 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
     recall=recall_audit(pages,idx,candidates)
     recall['findings'].extend(citation_findings)
     if recall['findings']:recall['status']='needs_attention'
-    unresolved={'recall_audit_findings':recall['findings'],'rejected_parser_mentions':idx['rejected_parser_mentions'],'source_consistency_conflicts':source_conflicts(idx),'index_issues':idx['review_queue'],
+    name_audit=reconcile_names(name_inventory,idx,candidates,ALIASES)
+    unresolved={'zero_result_reconciliation':[{'reason':'zero_candidates_require_review_even_when_name_scan_is_empty'}] if not candidates else [],
+                'organization_reference_reconciliation':name_audit['pending_entries']+name_audit['unmapped_reference_name_hits'],
+                'organization_name_scan_coverage':[{'reason':'reference_region_or_text_coverage_unconfirmed'}] if name_audit['coverage_pending'] else [],
+                'recall_audit_findings':recall['findings'],'rejected_parser_mentions':idx['rejected_parser_mentions'],'source_consistency_conflicts':source_conflicts(idx),'index_issues':idx['review_queue'],
                 'unlinked_organization_year':idx['organization_unlinked_candidates'],
                 'unresolved_reference_region_entries':[e for e in working.get('reference_region_audit',{}).get('entries',[]) if e['status']=='unresolved'],
                 'numeric_pdf_candidates':data.get('unlinked_numeric_pdf_groups',[]),
@@ -182,10 +198,10 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
             'organization_attributions':attributions,'unresolved':unresolved,
             'corrections':corrections,'target_pdf_mentions':pdf_mentions,
             'reference_region_audit':working.get('reference_region_audit',{}),
-            'recall_audit':recall,
+            'recall_audit':recall,'organization_reference_audit':name_audit,
             'target_coverage':{'expected_target':expect_target,'linked_candidate_count':len(candidates),
                                'pdf_mention_count':len(pdf_mentions),'text_attribution_count':len(attributions),
-                               'status':'linked_candidates_found' if candidates else 'no_linked_candidates'},
+                               'status':'linked_candidates_found' if candidates else 'zero_requires_review'},
             'quality':{'readiness':'pending_validation','issues':issues,'recall_certified':False,
                        'paragraph_boundaries_certified':False},
             'provenance':{'pdf_evidence_session':evidence_stats(),'skill_version':'1.1.1','tool_version':__version__,'artifacts':artifacts,
@@ -206,6 +222,11 @@ def packet(path, parser_dir, output, catalog=None, expect_target=False, id_state
     save(output/'json'/path.name,result)
     return {'paper':path.stem,'source_pdf':str(pdf),'source_sha256':data['source']['sha256'],
             'page_count':len(pages),'readiness':result['quality']['readiness'],
+            'organization_reference_entries':name_audit['reference_entry_count'],
+            'organization_reference_pending':len(name_audit['pending_entries']),
+            'organization_unexported_body_uses':name_audit['unexported_body_use_count'],
+            'organization_name_unmapped_hits':len(name_audit['unmapped_reference_name_hits']),
+            'zero_result_requires_review':name_audit['zero_result_requires_review'],
             'target_candidates':len(candidates),'pdf_target_mentions':len(pdf_mentions),'reference_repairs':len(corrections),
             'validation_errors':errors,'issue_count':len(issues)}
 

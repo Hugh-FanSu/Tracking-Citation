@@ -2,7 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/paper_citation_pipeline/engine/runtime'))
-from standardize_citations import normalize, unep_rows, ORG_YEAR, org_reference
+from standardize_citations import normalize, unep_rows, ORG_YEAR, org_reference, alias_pattern
 
 
 def sample(text, refs, mentions=(), groups=()):
@@ -16,6 +16,13 @@ def ref(i, raw, year='2021'):
 
 
 class StandardizeTests(unittest.TestCase):
+    def test_compound_signature_matches_hyphen_or_space_in_body(self):
+        import re
+        pattern=alias_pattern('UNEP-WCMC')
+        self.assertIsNotNone(re.fullmatch(pattern,'UNEP-WCMC',re.I))
+        self.assertIsNotNone(re.fullmatch(pattern,'UNEP WCMC',re.I))
+        self.assertIsNotNone(re.fullmatch(pattern,'UNEP\nWCMC',re.I))
+
     def test_aliases_preserve_original_and_match_across_forms(self):
         for alias in ['united nations environment', 'UNITED NATIONS ENVIRONMENT PROGRAMME',
                       'United Nations\nEnvironment Programme', 'UN Environment', 'U.N.E.P.']:
@@ -31,6 +38,12 @@ class StandardizeTests(unittest.TestCase):
     def test_broad_names_are_not_global_aliases(self):
         for name in ['United Nations', 'UN', 'Environment Programme', 'UNEPish', 'United Nations Environment Agency']:
             self.assertIsNone(org_reference(ref('b0', f'{name}, 2021. Report.')))
+
+    def test_damaged_pdf_url_does_not_abort_target_bibliography_scan(self):
+        raw = 'UNEP-WCMC (Comps.) 2015. The Checklist of CITES Species. http://[broken'
+        identity = org_reference(ref('b0', raw, '2015'))
+        self.assertIsNotNone(identity)
+        self.assertIn('compound_author_prefix_requires_scope_review', identity['evidence'])
 
     def test_repeated_same_paragraph(self):
         d = sample('(UNEP, 2021). Again (UNEP, 2021).', [ref('b0', 'UNEP, 2021. Report.')])
@@ -59,6 +72,13 @@ class StandardizeTests(unittest.TestCase):
         self.assertTrue(org_reference(ref('b0', raw, '2007'))['mixed_reference'])
         d = sample('(GlobalABC/UNEP, 2022)', [ref('b0', raw, '2007')])
         self.assertEqual(unep_rows(normalize(d, 'paper'))[0]['link_status'], 'needs_reference_split')
+
+    def test_reviewed_title_mention_does_not_become_target_citation(self):
+        idx=normalize(sample('(UNEP, 2021)',[ref('b0','UNEP, 2021. Report.')]),'paper')
+        idx['references'][0]['semantic_review']={'role':'mention','boundary':'clean'}
+        self.assertEqual(unep_rows(idx),[])
+        idx['references'][0]['catalog_match_evidence']={'status':'已匹配'}
+        self.assertEqual(len(unep_rows(idx)),1)
 
     def test_report_title_is_not_second_citation(self):
         self.assertIsNone(ORG_YEAR.search('According to UNEP 2024 Food Waste Index Report [22]'))

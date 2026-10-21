@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import unicodedata
+import time
 from pathlib import Path
 
 from .ai_review import Client, config
@@ -38,6 +39,7 @@ For all other roles return the detailed fields below; reference_text is OPTIONAL
 only needed when trimming unrelated leading/trailing material. Do not copy the whole raw entry.
 Distinguish actual authors/coauthors from publisher, commissioning organization,
 mention in a title, unrelated, and uncertain. A target URL alone is not authorship.
+Example: "Short, T F. 2005 Global distribution of seagrasses. In UNEP World Conserv. Monit. Cent. - Mar. metadata Cat" => target role=publisher or mention, NOT author: UNEP occurs after the title in the source/container position. A matching report catalogue is handled separately and does not change signed authorship.
 Reject glued captions and mixed entries; do not invent or rewrite any evidence.
 Publication year can differ from a year in the report title. Return JSON:
 {"references":[{"id":"input id","role":"author|publisher|commissioned|mention|unrelated|uncertain",
@@ -66,13 +68,14 @@ Do not merge adjacent paragraphs or captions; recover continuation across column
 only with evidence. Distinguish a genuine use/citation from a mere organization mention.
 Return JSON {"status":"complete|uncertain|not_a_citation","relevant":true,
 "segments":[{"start_line":"input id","start":0,"end_line":"input id","end":42}],
-"reason":"short explanation"}. Offsets are Unicode character offsets, end exclusive.
+"boundary_correction":false,"reason":"short explanation"}. Offsets are Unicode character offsets, end exclusive.
 Use start=0 and end=null for whole lines; null end means the full last line,
 so do not guess character counts. Column/page breaks are NOT paragraph endings.
 Each segment MUST stay within a single page and block_id. For a paragraph spanning blocks or pages, return separate segments for each block in reading order; never put a page or block transition inside one segment.
 Segments must reproduce the FULL citation paragraph in reading order from input lines,
 not generated prose. Multiple segments allow column/page transitions. Include the marker.
 If the full paragraph is not available use uncertain; do not truncate to fit the window.
+If the candidate paragraph merges unrelated paragraphs, you may select only the full relevant paragraph. You MUST set boundary_correction=true whenever the selected complete paragraph omits text from the candidate because that text belongs to adjacent paragraphs. Give a specific reason describing the incorrect merged boundary. The original candidate is retained separately.
 A complete result means you checked both beginning and end, not merely found the marker."""
 
 
@@ -111,14 +114,16 @@ class Reviewer:
                 try:
                     validate(record["result"])
                 except (ValueError, KeyError, TypeError, IndexError) as exc:
-                    record = {"status": "failed", "error": str(exc)}
+                    record = dict(record, status="failed", error=str(exc),
+                                  raw_result=deepcopy(record["result"]))
         elif not self.cfg or len(wire) > MAX_INPUT or self.calls >= MAX_CALLS or self.input_chars+len(wire)>MAX_TOTAL_INPUT or self.output_tokens_reserved+output_limit>MAX_TOTAL_OUTPUT:
             record = {"status": "pending", "reason": "api_not_configured" if not self.cfg else "bounded_review_budget_exceeded"}
         else:
             self.calls += 1
             self.input_chars += len(wire)
             self.output_tokens_reserved += output_limit
-            print(f"本地证据核验：{stage} · 模型请求 {self.calls}/{MAX_CALLS}", flush=True)
+            label={"bibliography":"参考文献条目","reference_recovery":"参考文献条目恢复","reference_regions":"参考文献区域","context":"引用上下文","narrative_attribution":"叙述性引用","target_mentions":"机构提及","article_metadata":"论文信息"}.get(stage,stage)
+            print(f"本地证据核验：{label} · 模型请求 {self.calls}/{MAX_CALLS}", flush=True)
             record = {"status": "started", "stage": stage, "input": payload, "fingerprint": key, "input_characters":len(wire), "max_output_tokens":output_limit}
             atomic_json(path, record)
             client = None
@@ -143,6 +148,7 @@ class Reviewer:
                 used=record.get('usage',{}).get('completion_tokens')
                 if type(used) is int and 0<=used<=output_limit:
                     self.output_tokens_reserved-=output_limit-used
+                record["completed_at"] = time.time()
                 atomic_json(path, record)
         summary = {k: deepcopy(v) for k, v in record.items() if k != "input"}
         summary.update(stage=stage, fingerprint=key)
@@ -171,7 +177,24 @@ def source_lines(pages):
 def target_in_signature(text, target):
     names=[target.get('canonical_name',''),target.get('organization_id','')]
     names += [a.get('name','') if isinstance(a,dict) else a for a in target.get('aliases',[])]
-    return any(name and re.search(r'(?<!\w)'+r'\s+'.join(re.escape(w) for w in name.split())+r'(?!\w)',text,re.I) for name in names)
+    if any(name and re.search(r'(?<!\w)'+r'\s+'.join(re.escape(w) for w in name.split())+r'(?!\w)',text,re.I) for name in names):
+        return True
+    # A long institutional signature can have one missing or substituted
+    # character in the source PDF. Only compare the *entire* quoted author
+    # name, never a title, publisher clause or arbitrary substring.
+    candidate=' '.join(text.casefold().split())
+    def one_edit(left,right):
+        if abs(len(left)-len(right))>1:return False
+        i=j=errors=0
+        while i<len(left) and j<len(right):
+            if left[i]==right[j]:i+=1;j+=1;continue
+            errors+=1
+            if errors>1:return False
+            if len(left)>len(right):i+=1
+            elif len(right)>len(left):j+=1
+            else:i+=1;j+=1
+        return errors+int(i<len(left) or j<len(right))==1
+    return any(len(name)>=20 and one_edit(candidate,' '.join(name.casefold().split())) for name in names if name)
 
 
 def validate_references(result, batch, target=None):
@@ -181,6 +204,8 @@ def validate_references(result, batch, target=None):
         raise ValueError("Model omitted bibliography entries")
     seen = set()
     for d in decisions:
+        if not isinstance(d, dict) or not isinstance(d.get("id"), str):
+            raise ValueError("Unknown or duplicate reference id")
         ident = d.get("id")
         if ident not in expected or ident in seen:
             raise ValueError("Unknown or duplicate reference id")
@@ -217,20 +242,54 @@ def validate_references(result, batch, target=None):
             raise ValueError('Target organization absent from quoted author signature')
 
 
+def salvage_reference_decisions(result, batch, target):
+    """Validate independent siblings; never guess IDs or resolve duplicates."""
+    rows = result.get("references") if isinstance(result, dict) else None
+    rows = rows if isinstance(rows, list) else []
+    accepted, pending = [], {}
+    for item in batch:
+        matches = [row for row in rows if isinstance(row, dict)
+                   and isinstance(row.get("id"), str) and row["id"] == item["id"]]
+        if len(matches) != 1:
+            pending[item["id"]] = "missing_reference_decision" if not matches else "duplicate_reference_decision"
+            continue
+        decision = deepcopy(matches[0])
+        try:
+            validate_references({"references": [decision]}, [item], target)
+        except (ValueError, KeyError, TypeError, IndexError) as exc:
+            pending[item["id"]] = str(exc)
+        else:
+            accepted.append(decision)
+    return accepted, pending
+
+
 def review_references(index, target, reviewer):
     """Review all entries, not just candidates; retain every original reference."""
     refs = {r["reference_id"]: r for r in index["references"]}
-    decisions = {}
+    decisions, pending = {}, {}
     batches = list(chunks([{"id": ident, "raw": r.get("raw_citation") or ""}
                            for ident, r in refs.items()]))
-    for batch in batches:
+    for original_batch in batches:
+        id_map = {('r' if n == 0 else f'r{n+1}'): item["id"] for n, item in enumerate(original_batch)}
+        batch = [{"id": short, "raw": refs[full].get("raw_citation") or ""} for short, full in id_map.items()]
         record = reviewer.request("bibliography", REFERENCE_PROMPT,
                                   {"target": target, "references": batch},
                                   lambda result: validate_references(result, batch, target))
         if record["status"] != "completed":
-            continue
-        for d in record["result"]["references"]:
+            valid, unresolved = salvage_reference_decisions(record.get("raw_result"), batch, target)
+            for short, reason in unresolved.items():
+                full = id_map[short]
+                pending[full] = dict(status="pending", reason=reason,
+                                     request_error=record.get("error") or record.get("reason"),
+                                     fingerprint=record["fingerprint"])
+                refs[full]["semantic_review_pending"] = pending[full]
+        else:
+            valid = record["result"]["references"]
+        for result_decision in valid:
+            d = deepcopy(result_decision)
+            d["id"] = id_map[d["id"]]
             ref = refs[d["id"]]
+            ref.pop("semantic_review_pending", None)
             decisions[d["id"]] = d
             ref["semantic_review"] = dict(d, fingerprint=record["fingerprint"])
             cleaned=d.get('reference_text',ref.get('raw_citation',''))
@@ -274,7 +333,8 @@ def review_references(index, target, reviewer):
             # Non-author roles remain visible. They are not silently discarded or
             # promoted to author: the local gate requires a collection decision.
     return {"status": "completed" if len(decisions) == len(refs) and refs else "pending",
-            "expected": len(refs), "reviewed": len(decisions), "decisions": decisions}
+            "expected": len(refs), "reviewed": len(decisions), "decisions": decisions,
+            "pending": pending}
 
 
 def audit_regions(index, pages, target, reviewer):
@@ -311,6 +371,14 @@ def audit_regions(index, pages, target, reviewer):
             "pages": coverage["pages"], "coverage": coverage, "checks": results}
 
 
+def context_tokens(value):
+    text = unicodedata.normalize('NFKC', value or '').casefold()
+    text = re.sub(r'(?<=\w)-\s*\n\s*(?=\w)', '', text)
+    # PDF superscripts split units from numbers; C_org is a common carbon label.
+    text = re.sub(r'\bc\s+org\b', 'corg', text)
+    return re.findall(r'[^\W\d_]+|\d+', text, re.UNICODE)
+
+
 def validate_context(result, lines, raw_marker, candidate=None, prose=True):
     if result.get("status") not in {"complete", "uncertain", "not_a_citation"} or type(result.get("relevant")) is not bool:
         raise ValueError("Invalid context decision")
@@ -345,17 +413,65 @@ def validate_context(result, lines, raw_marker, candidate=None, prose=True):
             raise ValueError("Complete context lacks citation marker or relevant evidence")
         if prose and not re.search(r'[.!?;:][\\"\'’”\])]*$',text.rstrip()):
             raise ValueError('Prose context ends in an unfinished continuation')
-        content=lambda value:''.join(c for c in unicodedata.normalize('NFKC',value or '').casefold() if c.isalnum())
-        if candidate and content(candidate) not in content(text):
+        original, recovered = context_tokens(candidate), context_tokens(text)
+        cursor = iter(recovered)
+        preserved = all(any(token == value for value in cursor) for token in original)
+        # Cropping a parser-merged following paragraph requires both model intent
+        # and native geometry, never a free-text explanation alone.
+        cropped = False
+        if result.get('boundary_correction') is True and original[:len(recovered)] == recovered and len(original) > len(recovered) and used:
+            last = max(used)
+            tail = lines[last + 1:]
+            if tail and 'bbox' in tail[0] and 'bbox' in lines[last]:
+                same_column = tail[0]['page'] == lines[last]['page'] and 5 <= tail[0]['bbox'][0] - lines[last]['bbox'][0] <= 40
+                needed = original[len(recovered):]
+                native_tail = context_tokens(' '.join(l['text'] for l in tail))
+                cropped = same_column and native_tail[:len(needed)] == needed
+        if candidate and not preserved and not cropped:
             raise ValueError('Reviewed context would omit existing candidate text')
     return text
+
+
+def same_native_block(packet, first, second):
+    occurrences = {o.get('location_id'): o for o in packet['citation_index'].get('occurrences', [])}
+    a = occurrences.get(first.get('location_id'), {}).get('native_locator', {})
+    b = occurrences.get(second.get('location_id'), {}).get('native_locator', {})
+    if (a.get('page') is not None and a.get('block_id') is not None
+            and (a['page'], a['block_id']) == (b.get('page'), b.get('block_id'))):
+        return True
+    # A verified paragraph can span several blocks/pages. Every coordinate of
+    # the new attribution must belong to the previously selected source lines.
+    from paper_citation_pipeline.evidence_geometry import overlaps
+    coords = occurrences.get(second.get('location_id'), {}).get('coordinates', [])
+    lines = source_lines(packet.get('pdf_pages', []))
+    positions = {line['id']: n for n, line in enumerate(lines)}
+    selected = []
+    for segment in first.get('semantic_context', {}).get('segments', []):
+        start, end = positions.get(segment['start_line']), positions.get(segment['end_line'])
+        if start is None or end is None:
+            return False
+        selected.extend({'page':line['page'], 'bbox':line['bbox']} for line in lines[start:end+1])
+    return bool(coords and selected) and all(any(overlaps(c, line) for line in selected) for c in coords)
 
 
 def review_contexts(packet, reviewer):
     lines = source_lines(packet["pdf_pages"])
     results = {}
+    verified_contexts = []
     references = {r["reference_id"]: r for r in packet["citation_index"]["references"]}
     for row in packet["target_candidates"]:
+        narrative = next((o for o in packet['citation_index'].get('occurrences',[]) if o.get('location_id')==row.get('location_id') and o.get('semantic_attribution')),None)
+        reused = next(((old,record,text) for old,record,text in verified_contexts
+                       if narrative and same_native_block(packet, old, row) and old.get('report_candidate_id')==row.get('report_candidate_id')
+                       and row.get('raw_marker') and flat(row['raw_marker']) in flat(text)
+                       and row.get('paragraph_text') and flat(row['paragraph_text']) in flat(text)),None)
+        if reused:
+            old,record,text=reused
+            results[row['record_id']]=dict(deepcopy(record),reused_from_record=old['record_id'],basis='same_reference_and_exact_native_paragraph_contains_separately_reviewed_attribution')
+            row['pre_semantic_paragraph']=row.get('paragraph_text');row['paragraph_text']=text
+            row['context_completeness']='model_checked_native_source_spans'
+            row['semantic_context']=dict(deepcopy(old['semantic_context']),reused_from_record=old['record_id'])
+            continue
         pages = set(row.get("pdf_pages", []))
         if not pages:
             results[row["record_id"]] = {"status": "pending", "reason": "missing_citation_location"}
@@ -391,7 +507,8 @@ def review_contexts(packet, reviewer):
             row["pre_semantic_paragraph"] = row.get("paragraph_text")
             row["paragraph_text"] = text
             row["context_completeness"] = "model_checked_native_source_spans"
-            row["semantic_context"] = {"fingerprint": record["fingerprint"], "segments": record["result"]["segments"], "reason": record["result"].get("reason")}
+            row["semantic_context"] = {"fingerprint": record["fingerprint"], "segments": record["result"]["segments"], "reason": record["result"].get("reason"), "boundary_correction": record["result"].get("boundary_correction", False)}
+            verified_contexts.append((row,record,text))
     return results
 
 
@@ -410,6 +527,9 @@ def gate(packet, references, regions, contexts):
             else:add("bibliography_identity_or_boundary_unresolved", ident)
     if regions.get("status") != "completed":
         add("reference_region_coverage_incomplete")
+    for ref in packet.get('citation_index', {}).get('references', []):
+        if ref.get('catalog_author_review', {}).get('status') == 'failed':
+            add('catalog_author_signature_unresolved', ref['reference_id'])
     for row in packet.get("target_candidates", []):
         decision = references.get("decisions", {}).get(row.get("report_candidate_id"), {})
         if decision.get("role") != "author" and row.get('collection_tier') != 1:

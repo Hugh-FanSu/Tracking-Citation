@@ -1,5 +1,6 @@
 """Install/update this release into a user-local Python environment."""
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -19,6 +20,10 @@ def main():
     python = env / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     subprocess.run([str(python), '-m', 'pip', 'install', '--upgrade', str(wheels[0]) + '[full]'], check=True)
     subprocess.run([str(python), '-c', 'import tkinter'], check=True)
+    resources = base / 'resources' / wheels[0].name.split('-')[1]
+    for name in ('templates', 'docs', 'examples'):
+        if (root / name).is_dir():
+            shutil.copytree(root / name, resources / name, dirs_exist_ok=True)
     if sys.platform == 'darwin':
         launcher = base / 'Tracking Citation.app'
         if not launcher.exists():
@@ -33,6 +38,7 @@ def main():
         subprocess.run(['powershell.exe', '-NoProfile', '-Command', script], check=True)
         subprocess.Popen([str(pythonw), '-m', 'paper_citation_pipeline.gui'], cwd=base)
     print('Installed. Launcher location:', base)
+    print('Versioned templates and documentation:', resources)
 
 
 if __name__ == '__main__':

@@ -1,25 +1,27 @@
-# Mac 和 Windows 安装、更新与发布
+# 安装、更新与发布
 
-同一份 Python 源码同时维护两个平台，版本以 `pyproject.toml` 和包内 `__version__` 为准。
+当前版本为0.9.0.dev4开发预发布；版本号由 `pyproject.toml` 和包内 `__version__` 同步维护。
 
 ## 使用者
 
-先安装 Python 3.12（包含 Tk；Windows 需要 Python Launcher）、Docker Desktop，再启动仓库的 GROBID：`docker compose up -d`。默认只开放本机8070端口。已有兼容GROBID服务时可复用。
+从GitHub Releases下载Mac或Windows安装包。先安装Python 3.12（包含Tk，Windows还需Python Launcher）和Docker，再在解压目录运行 `docker compose up -d` 启动GROBID。已有兼容服务可复用。
 
-从 GitHub Releases 获取对应平台压缩包，解压后双击 `Install-macOS.command` 或 `Install-Windows.cmd`。安装需要联网下载依赖，首次解析还可能下载Docling模型；完成后打开图形工作台。
+双击 `Install-macOS.command` 或 `Install-Windows.cmd`。安装需要联网；首次解析可能下载Docling模型。Mac安装到 `~/Tracking-Citation`，Windows安装到 `%LOCALAPPDATA%/Tracking-Citation`。模板、文档和配置示例复制到其中的 `resources/0.9.0.dev4/`。
 
-安装位置：Mac 为 `~/Tracking-Citation`，Windows 为 `%LOCALAPPDATA%/Tracking-Citation`。图形启动器在该目录。更新时解压新版并再次执行安装脚本，升级相同环境；论文、模板和编号文件保留在用户自己的数据目录。运行更新前先退出应用。
+更新前退出程序，再运行新版安装脚本。已有论文、编号和项目模板保留在原数据目录；新模板放在版本资源目录供选择。台账升级另见[队列版本迁移说明](central-ledger.md)。
 
-这些是带安装脚本的分平台发行包，不是内嵌Python/GROBID的独立.app/.exe；目前未做签名或公证，未承诺Windows完整PDF端到端验证。Mac的Apple Silicon和Intel共用安装脚本，依赖会按本机平台安装。
+安装包不是内嵌Python/GROBID的独立.app或.exe，未签名或公证。Windows完整PDF端到端解析尚未实机验证。
 
 ## 维护者
 
-当前Actions工作流尚未上传：推送凭据缺少GitHub的`workflow`权限。以下自动测试/发布步骤需先上传`.github/workflows/test.yml`和`release.yml`才生效；当前仓库尚不会自动生成平台ZIP。
+```sh
+python -m pip install '.[ledger,dev]'
+PYTHONPATH=src:src/paper_citation_pipeline/engine/runtime python -m unittest discover -s tests
+python scripts/build_release.py
+```
 
-1. 修改代码并同步两个版本号，更新说明。
-2. 推送分支，查看Mac/Windows测试结果。CI使用合成数据，不上传研究论文、不调用付费API；不安装Docling大模型，不代表完整解析验证。
-3. 需要正式发布时，创建与版本一致的标签，例如 `v0.8.1` 并推送。
-4. Release workflow在两个平台运行测试、构建wheel和源码包，并组装平台ZIP。两个任务成功后创建GitHub草稿Release；检查产物后手动发布。
-5. 不发标签也可手动运行workflow检查打包，Actions产物可下载。
+构建输出位于 `release/<版本>/`，包含wheel、源码、两个平台安装ZIP、模板ZIP和SHA256SUMS.txt。检查内容后推送提交与对应版本标签，并上传到GitHub预发布页。
 
-无自动应用内更新；新版安装脚本负责覆盖升级工具依赖。不要提交PDF、已填写Excel、编号档案、API Key或本地运行输出。
+本次手工测试、构建和发布。当前凭据只有repo权限，没有workflow权限，GitHub Actions工作流未上传；不宣称自动发布或跨平台CI通过。
+
+不得发布PDF、已填写采集表、项目编号档案、API密钥、台账数据库或运行日志。

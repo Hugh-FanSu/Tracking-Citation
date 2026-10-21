@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from paper_citation_pipeline.local_review import (Reviewer, review_references,
-    validate_references, validate_context, gate, source_lines)
+    validate_references, validate_context, gate, source_lines, salvage_reference_decisions)
 from paper_citation_pipeline.delivery import compact, decode, seal, blockers, prepare_delivery
 
 
@@ -35,6 +35,46 @@ class LocalReviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):validate_references({'references':[]},batch)
         d=self.decision();d['title']='invented title'
         with self.assertRaises(ValueError):validate_references({'references':[d]},batch)
+
+    def test_partial_bibliography_preserves_valid_siblings_and_cache(self):
+        target = dict(organization_id='UNEP', canonical_name='UNEP')
+        raw = 'UNEP and AMAP (2019). Mercury report 2018.'
+        refs = [dict(reference_id='full-a', raw_citation=raw),
+                dict(reference_id='full-b', raw_citation='Smith (2020). Other study.')]
+        with tempfile.TemporaryDirectory() as temp, patch('paper_citation_pipeline.local_review.config', return_value={'model':'test','max_tokens':8192}), patch('paper_citation_pipeline.local_review.Client') as client:
+            client.return_value.last_metadata = {}
+            client.return_value.request.return_value = ({'references':[self.decision(), {'id':8, 'role2':'unrelated'}]}, {})
+            result = review_references({'references':refs}, target, Reviewer('config',temp))
+            self.assertEqual(result['reviewed'], 1)
+            self.assertEqual(result['status'], 'pending')
+            self.assertEqual(refs[0]['semantic_review']['id'], 'full-a')
+            self.assertIn('full-b', result['pending'])
+            self.assertIn('semantic_review_pending', refs[1])
+            again = review_references({'references':refs}, target, Reviewer('config',temp))
+            self.assertEqual(again['reviewed'], 1)
+            self.assertEqual(client.return_value.request.call_count, 1)
+
+    def test_partial_bibliography_preserves_catalog_source_marked_unrelated(self):
+        batch = [{'id':'r','raw':'Other source.'},
+                 {'id':'r2','raw':'FAO. Global Assessment of Soil Pollution: Report. Rome, FAO. In.; 2021.'}]
+        raw = {'references':[{'id':8,'role2':'unrelated','boundary':'clean'},
+                             {'id':'r2','role':'unrelated','boundary':'clean'}]}
+        before = copy.deepcopy(raw)
+        valid, pending = salvage_reference_decisions(raw, batch, {'canonical_name':'UNEP'})
+        self.assertEqual([d['id'] for d in valid], ['r2'])
+        self.assertEqual(valid[0]['role'], 'unrelated')
+        self.assertEqual(list(pending), ['r'])
+        self.assertEqual(raw, before)
+
+    def test_salvage_rejects_ambiguous_and_invented_decisions(self):
+        batch = [{'id':'r','raw':'UNEP and AMAP (2019). Mercury report 2018.'}]
+        for rows in ([self.decision(),self.decision()],
+                     [dict(self.decision(), evidence='invented')],
+                     [dict(self.decision(), role='joint')],
+                     [{'id=':'r'}, None, {'id':[]}], []):
+            accepted, pending = salvage_reference_decisions({'references':rows}, batch, {'canonical_name':'UNEP'})
+            self.assertEqual(accepted, [])
+            self.assertIn('r', pending)
 
     def test_context_spans_support_cross_page_but_not_unchecked_block_join(self):
         lines=[dict(id='a',page=1,block_id=0,text='The report (UNEP, 2019) says'),
@@ -149,6 +189,13 @@ class LocalReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Target organization absent'):
             validate_references({'references':[d]},[{'id':'r','raw':'Smith J (2020). Study.'}],{'canonical_name':'United Nations Environment Programme','aliases':[{'name':'UNEP'}]})
 
+    def test_single_character_pdf_typo_in_full_institution_author_is_accepted(self):
+        from paper_citation_pipeline.local_review import target_in_signature
+        target={'canonical_name':'United Nations Environment Programme','aliases':[{'name':'UNEP'}]}
+        self.assertTrue(target_in_signature('United Nation Environment Programme',target))
+        self.assertFalse(target_in_signature('United Nation Environment Programme. Other publisher',target))
+        self.assertFalse(target_in_signature('United Nations Development Programme',target))
+
     def test_completed_usage_releases_unused_output_reservation(self):
         with tempfile.TemporaryDirectory() as temp, patch('paper_citation_pipeline.local_review.config',return_value={'model':'test','max_tokens':8192}), patch('paper_citation_pipeline.local_review.Client') as client:
             client.return_value.request.return_value=({'ok':True},{'usage':{'completion_tokens':20}})
@@ -177,3 +224,40 @@ class LocalReviewTests(unittest.TestCase):
             validate_context(d,lines,'UNEP',' '.join(l['text'] for l in lines))
         d['segments'].append(dict(start_line='b',end_line='b',end=None))
         self.assertIn('continues here.',validate_context(d,lines,'UNEP',' '.join(l['text'] for l in lines)))
+
+    def test_long_reference_ids_use_short_wire_ids_and_restore_identity(self):
+        ident='native_ref_1c6e1355d0538350cce4'
+        refs=[dict(reference_id=ident,raw_citation='UNEP and AMAP (2019). Mercury report 2018.',organization_candidate=None)]
+        with tempfile.TemporaryDirectory() as temp, patch('paper_citation_pipeline.local_review.config',return_value={'model':'test','max_tokens':8192}), patch('paper_citation_pipeline.local_review.Client') as client:
+            client.return_value.request.return_value=({'references':[self.decision('r')]},{})
+            result=review_references({'references':refs},dict(organization_id='UNEP',canonical_name='UNEP'),Reviewer('cfg',temp))
+            self.assertIn(ident,result['decisions'])
+            wire=json.loads(client.return_value.request.call_args.args[0][1]['content'])
+            self.assertEqual(wire['references'][0]['id'],'r')
+
+    def test_context_restores_missing_word_without_dropping_candidate(self):
+        lines=[dict(id='a',page=1,block_id=0,text='UNEP reports low cost materials.')]
+        d=dict(status='complete',relevant=True,segments=[dict(start_line='a',end_line='a',end=None)])
+        self.assertEqual(validate_context(d,lines,'UNEP','UNEP reports low materials.'),lines[0]['text'])
+        with self.assertRaisesRegex(ValueError,'omit existing'):
+            validate_context(d,lines,'UNEP','UNEP reports additional results for low cost materials.')
+
+    def test_character_subsequence_and_reason_cannot_override_word_change(self):
+        lines=[dict(id='a',page=1,block_id=0,text='UNEP reports notable effects.')]
+        d=dict(status='complete',relevant=True,segments=[dict(start_line='a',end_line='a',end=None)],boundary_correction=True,reason='model claims corrected boundary')
+        with self.assertRaisesRegex(ValueError,'omit existing'):
+            validate_context(d,lines,'UNEP','UNEP reports no effect.')
+
+    def test_boundary_correction_requires_native_indent_and_exact_remaining_text(self):
+        lines=[dict(id='a',page=1,block_id=0,text='UNEP reports results.',bbox=[10,0,100,10]),
+               dict(id='b',page=1,block_id=0,text='Another paragraph follows.',bbox=[24,12,100,22])]
+        d=dict(status='complete',relevant=True,boundary_correction=True,segments=[dict(start_line='a',end_line='a',end=None)])
+        candidate='UNEP reports results. Another paragraph follows.'
+        self.assertEqual(validate_context(d,lines,'UNEP',candidate),lines[0]['text'])
+        lines[1]['bbox'][0]=10
+        with self.assertRaises(ValueError):validate_context(d,lines,'UNEP',candidate)
+
+    def test_scientific_labels_and_line_hyphenation_preserved(self):
+        lines=[dict(id='a',page=1,block_id=0,text='UNEP estimates coverage of 12 km2 and Corg in sea-\ngrass.')]
+        d=dict(status='complete',relevant=True,segments=[dict(start_line='a',end_line='a',end=None)])
+        self.assertEqual(validate_context(d,lines,'UNEP','UNEP estimates coverage of 12 km 2 and C org in seagrass.'),lines[0]['text'])

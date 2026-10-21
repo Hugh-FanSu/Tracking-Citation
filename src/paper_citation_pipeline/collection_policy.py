@@ -8,17 +8,21 @@ def classify(packet,row):
     decision=ref.get('semantic_review',{})
     match=row.get('report_match',{})
     disputed=any('年份' in x and '不同' in x for x in match.get('notes',[]))
-    evidence='; '.join(decision.get('author_names',[]))
+    model_evidence='; '.join(decision.get('author_names',[]))
+    signature=ref.get('verified_author_signature',{})
+    evidence=signature.get('text') or model_evidence
     structure=decision.get('authorship_structure','uncertain')
     compound=bool(re.search(r'\bUNEP\s*[-–—]\s*WCMC\b|UNEP\s+World\s+Conserv',evidence,re.I))
     if compound:structure='compound'
+    elif signature.get('text') and signature.get('model_author_names_may_be_incomplete'):
+        structure='joint' if re.search(r'\b(?:and|with)\b|[&;]',evidence,re.I) else 'uncertain'
     tier=0
-    if match.get('status')=='matched' and not disputed:tier=1
+    if match.get('status')=='matched':tier=1
     elif decision.get('role')=='author' and decision.get('boundary')=='clean':
         tier=2 if structure=='sole' and len(decision.get('author_names',[]))==1 else 3
     return {'collection_tier':tier,'collection_tier_label':LABELS[tier],
             'authorship_structure':structure,'author_signature':evidence,
-            'compound_author_flag':compound,'collection_policy_version':'unep-three-tiers/1'}
+            'compound_author_flag':compound,'catalog_date_differs':disputed,'collection_policy_version':'unep-three-tiers/2'}
 
 def apply(packet):
     for row in packet.get('target_candidates',[]):row.update(classify(packet,row))

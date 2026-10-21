@@ -56,6 +56,46 @@ class TargetRecoveryTests(unittest.TestCase):
             other=normalize(sample('Other text',[]),'p');other['references']=refs
             self.assertEqual(recover_numeric(path,data,other)[0],[])
 
+    def test_parenthesized_number_uses_original_printed_reference_label(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'p.pdf';doc=pymupdf.open();doc.new_page().insert_text((50,100),'Paper title')
+            doc.new_page().insert_text((50,100),'A long body sentence attributes an important result to the United Nations Environment Programme source (86).')
+            doc.new_page().insert_text((50,100),'86. United Nations Environment Programme. One Health report. 2020.')
+            doc.save(path);doc.close()
+            idx=normalize(sample('Other text',[]),'p')
+            raw='United Nations Environment Programme. One Health report. 2020.'
+            with pymupdf.open(path) as doc:
+                b=ref('b85',raw,'2020');b.update(reference_id='r86',coordinates=[coord(3,doc[2].search_for(raw)[0])],
+                                                  organization_candidate=org_reference(b))
+            idx['references']=[b]
+            changes,findings=recover_numeric(path,{},idx)
+            self.assertEqual(len(changes),1);self.assertEqual(findings,[])
+            self.assertEqual([row['raw_marker'] for row in unep_rows(idx)],['(86)'])
+            self.assertEqual(recover_numeric(path,{},idx)[0],[])
+
+    def test_multi_number_superscript_span_recovers_each_printed_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'p.pdf';doc=pymupdf.open();doc.new_page().insert_text((50,100),'Paper title')
+            page=doc.new_page()
+            page.insert_text((50,100),'Environmental reporting uses verified institutional evidence.',fontsize=10)
+            page.insert_text((340,97),'25 26',fontsize=6.63)
+            page.insert_text((360,100),' Additional explanation follows in the paragraph.',fontsize=10)
+            page=doc.new_page()
+            raws=['UNEP. 2017. Life cycle initiative.','UNEP. 2011. Sustainability assessment.']
+            for n,raw in zip((25,26),raws):page.insert_text((50,100+(n-25)*25),f'{n}. {raw}')
+            doc.save(path);doc.close()
+            idx=normalize(sample('Other text',[]),'p')
+            refs=[]
+            with pymupdf.open(path) as doc:
+                for n,raw in zip((25,26),raws):
+                    b=ref(f'b{n}',raw,str(2017 if n==25 else 2011))
+                    b.update(reference_id=f'r{n}',coordinates=[coord(3,doc[2].search_for(raw)[0])],organization_candidate=org_reference(b))
+                    refs.append(b)
+            idx['references']=refs
+            changes,_=recover_numeric(path,{},idx)
+            self.assertEqual(len(changes),1)
+            self.assertEqual({row['report_candidate_id'] for row in unep_rows(idx)},{'r25','r26'})
+
     def test_table_code_requires_original_pdf_text(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'p.pdf';doc=pymupdf.open();page=doc.new_page();page.insert_text((50,100),'UNEP/CMS/ScC16/Inf.9.1.');doc.save(path);doc.close()

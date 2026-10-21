@@ -49,3 +49,23 @@ class NativeRecoveryTests(unittest.TestCase):
             changes=recover(pdf,idx,[dict(page=1,lines=lines)])
             self.assertEqual(len(changes),1)
             self.assertEqual(idx['occurrences'][0]['raw_marker'],'UNEP and AMAP 2019')
+
+    def test_catalog_personal_author_year_recovered_without_false_org_alias(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pdf=Path(temp)/'p.pdf';doc=pymupdf.open();page=doc.new_page()
+            page.insert_text((40,60),'Used (Short, 2005). UNEP 2005 is not this author citation.',fontsize=10)
+            page.insert_text((40,150),'Short, T. F. (2005). Global distribution of seagrasses. UNEP.',fontsize=10)
+            doc.save(pdf);doc.close()
+            with pymupdf.open(pdf) as doc:
+                lines=[]
+                for n,b in enumerate(doc[0].get_text('dict')['blocks']):
+                    for l in b.get('lines',[]):lines.append(dict(text=''.join(s['text'] for s in l['spans']),bbox=l['bbox'],block_id=n))
+            ref=dict(id='b',reference_id='r',raw_citation='Short, T. F. (2005). Global distribution of seagrasses. UNEP.',
+                     coordinates=[dict(page=1,bbox=lines[-1]['bbox'])],organization_candidate={'x':True},catalog_match_evidence={'matched':True},
+                     semantic_review=dict(role='publisher',boundary='clean',author_names=['Short, T. F.'],year='2005'))
+            idx=dict(document_id='doc',references=[ref],contexts=[],occurrences=[])
+            self.assertEqual(len(recover(pdf,idx,[dict(page=1,lines=lines)])),1)
+            self.assertEqual(idx['occurrences'][0]['raw_marker'],'Short, 2005')
+            idx['references'].append(dict(reference_id='other',semantic_review=dict(role='unrelated',boundary='clean',author_names=['Short, A.'],year='2005')))
+            idx['contexts']=[];idx['occurrences']=[]
+            self.assertEqual(recover(pdf,idx,[dict(page=1,lines=lines)]),[])

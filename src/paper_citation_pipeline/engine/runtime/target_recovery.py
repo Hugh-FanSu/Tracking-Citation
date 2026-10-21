@@ -77,6 +77,7 @@ def recover_personal_authors(index):
 def number_map(doc,index):
     """Read printed labels at exact bibliography coordinates. Never infer order+1."""
     found={};evidence={}
+    label_pattern=r'^\s*(?:[\[(](\d+)[\])]|(\d+)[.．]?)[\s\u0007]+(.+)'
     for r in index['references']:
         cs=r.get('coordinates',[])
         if not cs:continue
@@ -85,17 +86,18 @@ def number_map(doc,index):
             for line in block.get('lines',[]):
                 rect=pymupdf.Rect(line['bbox'])
                 if abs(rect.y0-box.y0)>4 or (rect&box).get_area()/max(min(rect.get_area(),box.get_area()),.01)<.5:continue
-                text=''.join(s['text'] for s in line['spans']);m=re.match(r'^\s*(?:[\[(](\d+)[\])]|(\d+)\.)\s*(.+)',text)
+                text=''.join(s['text'] for s in line['spans']);m=re.match(label_pattern,text)
                 if not m:
                     labels=[]
                     for bb in page.get_text('dict')['blocks']:
                         for ll in bb.get('lines',[]):
                             tt=''.join(ss['text'] for ss in ll['spans']).strip();rr=pymupdf.Rect(ll['bbox'])
                             if re.fullmatch(r'\d+\.',tt) and abs(rr.y0-rect.y0)<2 and 0<=rect.x0-rr.x1<40:labels.append(tt)
-                    if len(labels)==1:m=re.match(r'^\s*(?:[\[(](\d+)[\])]|(\d+)\.)\s*(.+)',labels[0]+' '+text)
+                    if len(labels)==1:m=re.match(label_pattern,labels[0]+' '+text)
                 if not m:continue
                 prefix=compact(m[3])[:40]
-                if len(prefix)<15 or not compact(r.get('raw_citation','')).startswith(prefix):continue
+                raw=re.sub(r'^\s*(?:[\[(]\d+[\])]|\d+[.．]?)[\s\u0007]+','',r.get('raw_citation',''))
+                if len(prefix)<15 or not compact(raw).startswith(prefix):continue
                 n=int(m[1] or m[2]);found.setdefault(n,[]).append(r)
                 evidence[n]=dict(page=c['page'],text=text,bbox=list(rect))
     return {n:rs[0] for n,rs in found.items() if len({r['reference_id'] for r in rs})==1},evidence
@@ -126,6 +128,34 @@ def recover_numeric(pdf,data,index):
             if re.search(r'(?:\d|[−+×]|\b(?:kg|cm|mm|mol|m|s))$',before):continue
             if not re.search(r'[A-Za-z]{3}',span.get('context','')) or len(span.get('context',''))<60:continue
             groups.append(dict(raw_marker=span['raw_marker'],expanded_numbers=span['expanded_numbers'],page=page_no,bboxes=[span['bbox']],source='original_pdf_superscript_unlinked'))
+        # Some journals print numeric citations in parentheses. Search only
+        # numbers independently verified at the original PDF bibliography
+        # coordinates; parser order is never used as a surrogate label.
+        first_reference_page=min((c['page'] for r in index['references'] for c in r.get('coordinates',[])),default=len(doc)+1)
+        for n,reference in mapping.items():
+            if not reference.get('organization_candidate'):continue
+            marker=f'({n})'
+            for page_no in range(2,min(first_reference_page,len(doc)+1)):
+                page=doc[page_no-1]
+                for box in page.search_for(marker):
+                    blocks=[b for b in page.get_text('blocks') if b[6]==0 and (pymupdf.Rect(b[:4])&box).get_area()/max(box.get_area(),.01)>.7]
+                    if len(blocks)!=1 or len(blocks[0][4])<60:continue
+                    groups.append(dict(raw_marker=marker,expanded_numbers=[n],page=page_no,
+                                       bboxes=[list(box)],source='original_pdf_parenthesized_number'))
+        for page_no in range(2,min(first_reference_page,len(doc)+1)):
+            page=doc[page_no-1]
+            for block in page.get_text('dict')['blocks']:
+                for line in block.get('lines',[]):
+                    spans=line['spans']
+                    for j,span in enumerate(spans):
+                        marker=span['text'].strip()
+                        if not re.fullmatch(r'\d{1,3}(?:\s+\d{1,3}){1,4}',marker):continue
+                        numbers=[int(n) for n in marker.split()]
+                        if not any(n in mapping and mapping[n].get('organization_candidate') for n in numbers):continue
+                        neighbors=[spans[k]['size'] for k in (j-1,j+1) if 0<=k<len(spans) and re.search(r'[A-Za-z]{3}',spans[k]['text'])]
+                        if not neighbors or span['size']>min(neighbors)*.8:continue
+                        groups.append(dict(raw_marker=span['text'],expanded_numbers=numbers,page=page_no,
+                                           bboxes=[list(span['bbox'])],source='original_pdf_multi_superscript_span'))
         for g in groups:
             targets=[mapping[n] for n in g['expanded_numbers'] if n in mapping and mapping[n].get('organization_candidate')]
             if not targets:continue

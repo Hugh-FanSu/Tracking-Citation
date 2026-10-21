@@ -16,7 +16,7 @@
 
 实体支持 citations、papers、reports，映射左侧是模板原表头，右侧是程序字段。notes包含来源JSON、局部来源ID、歧义和图表上下文；模板有专栏时可额外映射 visual_context。只改mapping，不能臆造未知模板字段。详细字段清单随工具项目的 docs/fields.md 提供，程序也会在未知字段时明确报错。
 
-运行JSON支持 input 或 parser_output（二选一）、output、target、aliases、kind、template、mapping、excel、catalog_json、grobid_url、ocr、resume、expect_target、必需的 id_state，以及可选 api_config（书目、原文上下文和覆盖证据核验）。相对路径以配置文件目录为基准，CLI覆盖路径以当前目录为基准。
+运行JSON支持 input 或 parser_output（二选一）、output、target、aliases、kind、template、mapping、excel、catalog_json、grobid_url、ocr、resume、expect_target、必需的 id_state，以及可选 api_config（参考文献条目、原文上下文和覆盖证据核验）。相对路径以配置文件目录为基准，CLI覆盖路径以当前目录为基准。
 
 无catalog_json时报告名称待核实；有本地清单时每条须含 title、url、date、excel_row。清单日期不必然等于出版年。名称匹配不会替代内容引用确认。
 

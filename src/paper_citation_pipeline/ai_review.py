@@ -41,7 +41,10 @@ class Client:
     def close(self):self.session.close()
     def request(self,messages,*,attempts=3,max_tokens=None):
         payload={'model':self.cfg['model'],'messages':messages,'stream':False,'max_tokens':max_tokens if max_tokens is not None else self.cfg['max_tokens']}
-        if urlparse(self.cfg['endpoint']).hostname=='open.bigmodel.cn':payload['thinking']={'type':'disabled'}
+        if self.cfg['model'].lower().startswith('glm-5.3-flash'):
+            payload['thinking']={'type':'enabled'}
+            payload['reasoning_effort']='low'
+        elif urlparse(self.cfg['endpoint']).hostname=='open.bigmodel.cn':payload['thinking']={'type':'disabled'}
         if self.cfg['json_mode']:payload['response_format']={'type':'json_object'}
         endpoint=self.cfg['endpoint']+'/chat/completions'
         for attempt in range(attempts):

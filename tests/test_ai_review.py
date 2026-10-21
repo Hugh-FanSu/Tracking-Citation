@@ -42,6 +42,18 @@ class AIReviewTests(unittest.TestCase):
         self.assertEqual(review_workbook(self.out),0)
         report=json.loads(self.out.with_suffix('.quality.json').read_text())
         self.assertEqual(report['status'],'passed')
+
+    def test_pdf_control_character_is_escaped_and_readback_passes(self):
+        self.packet['target_candidates'][0]['paragraph_text']='9 \u0007WHO citation'
+        self.path.write_text(json.dumps(self.packet))
+        export_packets([self.path],self.template,self.mapping,self.out,True,id_state=self.state)
+        _,checks=inspect_workbook(self.out)
+        self.assertFalse(any(c.get('status')=='error' for c in checks))
+        wb=load_workbook(self.out)
+        self.assertEqual(wb.active['B2'].value,'9 \\u0007WHO citation')
+        wb.close()
+        self.assertEqual(json.loads(self.path.read_text())['target_candidates'][0]['paragraph_text'],
+                         '9 \u0007WHO citation')
     def test_lost_cell_and_dropped_row_detected(self):
         wb=load_workbook(self.out);wb.active['B2']=None;wb.save(self.out)
         _,checks=inspect_workbook(self.out)

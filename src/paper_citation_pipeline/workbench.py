@@ -182,7 +182,7 @@ class Workbench(App):
         try:
             d=check(self.prefs['id_state']);self.number_label.set(f'编号自动续接  ·  论文已用 {d["paper"]["current"]}  /  记录已用 {d["record"]["current"]}')
         except (ValueError,OSError,KeyError):self.number_label.set('首次使用请在「编号管理」载入已有编号，或填写起始号码。')
-        self.ai_label.set('API Key 已填入，仅本次有效。' if self.api_key else '填入Key后核验书目和引用上下文；无Key仅生成待核验结果。')
+        self.ai_label.set('API Key 已填入，仅本次有效。' if self.api_key else '填入Key后核验参考文献条目和引用上下文；无Key仅生成待核验结果。')
     def open_templates(self):
         p=organization_dir(self.prefs['template_dir'],self.prefs['organization'])
         if p.exists():launch_path(p)
@@ -198,7 +198,7 @@ class Workbench(App):
         win,body=self.dialog('接口设置');tk,ttk=self.tk,self.ttk
         key=tk.StringVar(value=self.api_key);model=tk.StringVar(value=self.prefs['model']);endpoint=tk.StringVar(value=self.prefs['endpoint'])
         self.dialog_field(body,'模型名称',model);self.dialog_field(body,'API 地址（已填入智谱标准接口，可改其他兼容服务）',endpoint)
-        hint=tk.StringVar(value='用于本地书目与上下文证据核验，每篇有固定请求与用量上限；失败不自动重试。未完成核验时不会生成交付包。')
+        hint=tk.StringVar(value='用于本地参考文献条目与上下文证据核验，每篇有固定请求与用量上限；失败不自动重试。未完成核验时不会生成交付包。')
         self.label(body,hint,bg=self.BG,wraplength=580).pack(anchor='w',pady=16)
         def settings():
             cfg={'endpoint':endpoint.get().strip(),'model':model.get().strip()}

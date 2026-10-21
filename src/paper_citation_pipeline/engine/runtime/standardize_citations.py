@@ -19,8 +19,9 @@ UNEP_PROFILE = ALIASES.get('profile', 'unep' if ALIASES['organization_id']=='UNE
 
 
 def alias_pattern(name):
-    # Match whitespace/newlines and dotted abbreviations without changing source offsets.
-    return r'\s+'.join(re.escape(word).replace(r'\.', r'\.\s*').replace('/', r'\s*/\s*') for word in name.split())
+    # Match whitespace/newlines, hyphenated compound names and dotted abbreviations
+    # without changing source offsets or the verbatim citation marker.
+    return r'\s+'.join(re.escape(word).replace(r'\.', r'\.\s*').replace(r'\-', r'[-\s]+').replace('/', r'\s*/\s*') for word in name.split())
 
 
 ORG = '(?:' + '|'.join(alias_pattern(a['name']) for a in sorted(ALIASES['aliases'], key=lambda a: -len(a['name']))) + ')'
@@ -129,7 +130,14 @@ def org_reference(b):
     if alias_match:
         evidence.append('organization_in_reference_author_prefix')
     domains=ALIASES.get('domains',['unep.org'] if UNEP_PROFILE else [])
-    hosts=[urlsplit(u).hostname or '' for u in re.findall(r'https?://(?:(?!https?://)[^\s<>])+', ''.join(c for c in raw if not c.isspace() and unicodedata.category(c)!='Cf'),re.I)]
+    hosts=[]
+    for u in re.findall(r'https?://(?:(?!https?://)[^\s<>])+', ''.join(c for c in raw if not c.isspace() and unicodedata.category(c)!='Cf'),re.I):
+        try:
+            hosts.append(urlsplit(u).hostname or '')
+        except ValueError:
+            # A damaged URL in PDF text must not abort bibliography recovery.
+            # Other author, title and valid-domain evidence remains available.
+            continue
     if any(host==domain or host.endswith('.'+domain) for host in hosts for domain in domains):
         evidence.append('target_domain_in_reference')
     if UNEP_PROFILE and re.match(r'^Programme\s+UNE\b', raw, re.I) and re.search(r'Food waste index report\s+2024', raw, re.I):
@@ -402,6 +410,9 @@ def unep_rows(index):
             identity = ref['organization_candidate']
             if not identity:
                 continue
+            decision=ref.get('semantic_review',{})
+            if decision.get('role') in {'publisher','commissioned','mention','unrelated'} and not ref.get('catalog_match_evidence'):
+                continue  # A reviewed non-author is not rescued by a loose alias candidate.
             if identity['mixed_reference'] and edge['link_status'] != 'needs_reference_split':
                 continue  # A link to the merged Goodchild entry is NOT proof of a UNEP citation.
             same_para = sorted([x for x in index['occurrences'] if x['paragraph_id'] == o['paragraph_id']], key=lambda x: x['offsets']['start'] or 0)

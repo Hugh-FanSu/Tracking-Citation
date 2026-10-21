@@ -25,3 +25,6 @@ api-stages.json
 
 # Local diagnostic output
 /异常日志/
+
+/tmp/
+!templates/UNEP/引用采集模板.xlsx

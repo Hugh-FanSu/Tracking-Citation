@@ -10,7 +10,7 @@ from paper_citation_pipeline.evidence_geometry import overlaps
 
 
 def recover(pdf, index, pages):
-    refs = [r for r in index['references'] if r.get('semantic_review', {}).get('role') == 'author'
+    refs = [r for r in index['references'] if (r.get('semantic_review', {}).get('role') == 'author' or r.get('catalog_match_evidence'))
             and r['semantic_review'].get('boundary') == 'clean']
     if not refs:
         return []
@@ -21,15 +21,28 @@ def recover(pdf, index, pages):
     signatures = []
     for r in refs:
         d = r['semantic_review']
+        if not d.get('author_names'):continue
         if not d.get('year'):
             continue
         signature_text=r.get('verified_author_signature',{}).get('text')
         signature = alias_pattern(signature_text) if signature_text else r'\s*(?:and|&|,|/|-)\s*'.join(alias_pattern(a) for a in d['author_names'])
+        if d.get('role') != 'author' and len(d['author_names']) == 1:
+            author=d['author_names'][0]
+            if ',' in author:
+                surname=author.split(',',1)[0].strip()
+                ambiguous = any(
+                    other['reference_id'] != r['reference_id']
+                    and (other.get('semantic_review', {}).get('year') or str(other.get('year', ''))) == d['year']
+                    and any(name.split(',', 1)[0].strip().casefold() == surname.casefold()
+                            for name in other.get('semantic_review', {}).get('author_names', []))
+                    for other in index['references'])
+                if not ambiguous and surname and re.fullmatch(r'[A-Za-zÀ-ž’\x27 -]+',surname):
+                    signature='(?:'+signature+'|'+alias_pattern(surname)+')'
         # Ambiguous author/year pairs must remain unresolved.
         if sum((x.get('verified_author_signature',{}).get('text') == signature_text if signature_text else x['semantic_review'].get('author_names') == d['author_names']) and
                x['semantic_review'].get('year') == d['year'] for x in refs) != 1:
             continue
-        if sum(x['semantic_review'].get('year') == d['year'] for x in refs) == 1:
+        if d.get('role') == 'author' and sum(x['semantic_review'].get('year') == d['year'] for x in refs) == 1:
             signature = '(?:' + signature + '|' + ORG + ')'
         signatures.append((re.compile(r'(?<!\w)' + signature + r'(?:\s*[,.(]\s*|\s+)' + re.escape(d['year']) + r'(?![\da-z])', re.I), r))
     changes = []

@@ -10,6 +10,7 @@ import hashlib
 from importlib.metadata import version
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -530,7 +531,7 @@ def process_pdf(pdf, args):
             LOG.exception("%s: %s failed", pdf.name, name)
             return {"status": "failed", "error": str(exc), "seconds": round(time.perf_counter() - start, 3)}
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=int(os.environ.get("PAPER_STAGE_WORKERS", "2"))) as pool:
         pending = {
             pool.submit(run_stage, "grobid", tei, lambda: grobid_stage(pdf, tei, args.grobid_url, args.grobid_timeout, args.retries)): "grobid",
             pool.submit(run_stage, "docling", docling_path, lambda: (args.docling_worker.run(pdf, docling_path, args.logs / f"{pdf.stem}.docling.log", args.docling_timeout) if getattr(args, "docling_worker", None) else docling_stage(pdf, docling_path, args.docling_timeout, args.ocr, args.logs / f"{pdf.stem}.docling.log"))): "docling",

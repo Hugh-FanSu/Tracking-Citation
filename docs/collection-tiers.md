@@ -2,7 +2,7 @@
 
 Every citation carries `collection_tier` independently of confirmation status:
 
-1. Matched to the local UNEP report catalogue (unresolved year discrepancies do not qualify).
+1. Matched to the local UNEP report catalogue (catalogue webpage dates are not assumed to be publication years; retain discrepancies in `catalog_date_differs` and match notes).
 2. No catalogue match; the reference review confirms UNEP as the sole signed author.
 3. No catalogue match; UNEP is a confirmed author, including joint authors and compound signatures such as UNEP-WCMC. Preserve the complete author signature and `compound_author_flag`.
 
