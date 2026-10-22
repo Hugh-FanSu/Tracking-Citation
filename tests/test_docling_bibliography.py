@@ -4,7 +4,7 @@ import pymupdf
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src/paper_citation_pipeline/engine/runtime'))
 from reference_repairs import repair
 from standardize_citations import normalize,unep_rows
-from test_standardize import sample
+from test_standardize import sample,ref
 
 class DoclingBibliographyTests(unittest.TestCase):
  def setUp(self):
@@ -45,6 +45,34 @@ class DoclingBibliographyTests(unittest.TestCase):
  def test_no_duplicate_existing_reference(self):
   self.data['bibliography']=[{'id':'existing','raw_citation':self.raw[0],'title':'Emissions gap report 2024','year':'2024'}]
   working,changes=repair(self.pdf,self.data);self.assertEqual(len(changes),1);self.assertEqual(len(working['bibliography']),2)
+ def test_merged_comma_year_item_keeps_two_existing_references(self):
+  entries=['UNEP, 2023. Marine Pollution Prevention, Reduction and Control [WWW Document].',
+           'Untawale, A.G., Nair, S.A., 1974. Ecology of sand dune vegetation.']
+  doc=pymupdf.open();page=doc.new_page()
+  page.insert_text((40,70),'References',fontsize=9)
+  for y,text in zip((100,115),entries):page.insert_text((40,y),text,fontsize=9)
+  doc.save(self.pdf.with_name('merged.pdf'));doc.close()
+  pdf=self.pdf.with_name('merged.pdf')
+  with pymupdf.open(pdf) as doc:
+   lines=[line for block in doc[0].get_text('dict')['blocks'] for line in block.get('lines',[])][1:]
+  def coord(line):
+   x,y,r,b=line['bbox'];return {'page':1,'x':x,'y':y,'width':r-x,'height':b-y}
+  refs=[dict(ref('unep',entries[0],'2023'),coordinates=[coord(lines[0])]),
+        dict(ref('untawale',entries[1],'1974'),coordinates=[coord(lines[1])])]
+  bounds=[line['bbox'] for line in lines]
+  item={'self_ref':'#/texts/1','label':'list_item','text':' '.join(entries),
+        'prov':[{'page_no':1,'bbox':{'l':min(b[0] for b in bounds),'t':min(b[1] for b in bounds),
+                                   'r':max(b[2] for b in bounds),'b':max(b[3] for b in bounds),
+                                   'coord_origin':'TOPLEFT'}}]}
+  data=sample('Evidence (UNEP, 2023).',refs)
+  data['docling']={'document':{'body':{'children':[{'$ref':'#/texts/0'},{'$ref':'#/texts/1'}]},
+                                'texts':[{'self_ref':'#/texts/0','label':'section_header','text':'References'},item]}}
+  working,changes=repair(pdf,data)
+  self.assertEqual(changes,[])
+  self.assertEqual(len(working['bibliography']),2)
+  self.assertEqual(len(unep_rows(normalize(working,'paper'))),1)
+  self.assertEqual(working['reference_region_audit']['entries'][0]['reason'],
+                   'pdf_verified_container_of_existing_references')
  def test_bibliography_alone_does_not_create_body_citation(self):
   self.data['paragraphs']=self.data['paragraphs'][1:]
   working,changes=repair(self.pdf,self.data);self.assertEqual(len(changes),2)

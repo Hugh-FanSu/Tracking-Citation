@@ -17,6 +17,9 @@ class ReleaseResourcesTests(unittest.TestCase):
         bundle = load_bundle(ROOT / 'templates/UNEP', expected_org='UNEP')
         wb = openpyxl.load_workbook(bundle['template'])
         try:
+            names = ['CitationRecords', 'PaperInfo', 'ReportInfo', 'EntryExamples', 'Instructions']
+            self.assertEqual([(table.name, table.displayName) for sheet in wb for table in sheet.tables.values()],
+                             [(name, name) for name in names])
             for sheet in list(wb)[:3]:
                 self.assertFalse(any(c.value is not None for row in sheet.iter_rows(min_row=2) for c in row))
             self.assertEqual([len(s.data_validations.dataValidation) for s in list(wb)[:3]], [5, 1, 1])
