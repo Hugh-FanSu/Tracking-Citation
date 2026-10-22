@@ -211,7 +211,11 @@ def recover(pdf,data):
             if not present:
                 contained=[b for b in data['bibliography'] if len(presence_text(b.get('raw_citation','')))>=40 and presence_text(b['raw_citation']) in presence_text(raw)]
                 contained.sort(key=lambda b:presence_text(raw).index(presence_text(b['raw_citation'])))
-                if len(contained)>1 and not item.get('marker') and all(re.search(r'\(\s*(?:19|20)\d{2}[a-z]?\s*\)',b.get('raw_citation','')[:240]) for b in contained) and ''.join(presence_text(b['raw_citation']) for b in contained)==presence_text(raw) and presence_text(raw) in presence_text(' '.join(evidence)):
+                if (len(contained)>1 and not item.get('marker')
+                        and all(re.search(r'(?:\(\s*(?:19|20)\d{2}[a-z]?\s*\)|,\s*(?:19|20)\d{2}[a-z]?\.)',
+                                          b.get('raw_citation','')[:240]) for b in contained)
+                        and ''.join(presence_text(b['raw_citation']) for b in contained)==presence_text(raw)
+                        and presence_text(raw) in presence_text(' '.join(evidence))):
                     entry.update(status='present',reason='pdf_verified_container_of_existing_references',reference_ids=[b['id'] for b in contained],pdf_text_evidence=evidence)
                     for b in contained:
                         for p in data['paragraphs']:mark_reference_span(p,b['raw_citation'],item['self_ref'])
